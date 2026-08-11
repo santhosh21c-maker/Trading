@@ -2,7 +2,7 @@
 
 Practical Pine indicator for **options BUYING** on **NIFTY / BANKNIFTY / SENSEX** option charts (**1m & 5m**).
 
-Use on the **option premium chart** (CE or PE), not the index.
+Use on the **option premium chart** (CE or PE) for **any strike** — levels and signals scale to that chart’s price.
 
 ## Modes
 
@@ -20,16 +20,36 @@ Decider  = C ± 0.06·B
 Target N = C ± {1.00, 1.54, 1.83, 2.08}·B
 ```
 
-## How to trade (BUY only)
+## Entry rules (upside & downside)
 
-On the option chart, premium **up** = your long works.
+Valid both ways on the strike you are viewing:
 
-1. Wait for **INTRADAY** status `FROZEN` (OR complete), or use **PREDICTION** live.
-2. **BUY** when price breaks **above Decider High** (green label).
-3. Scale / exit at **Upper Target 1–4**.
-4. **EXIT / protect** if price falls back **under Decider Low**, or after Target 1 tag.
+1. **Decider → Target 1 (fixed)**  
+   After price visits the Decider zone, enter toward Target 1. Target for this leg is **T1**.
 
-Alerts are included for BUY and EXIT.
+2. **If Target 1 is broken** (close beyond T1)  
+   Expect the move to continue to **Target 4** (`EXTEND` signal). Stop can trail to Decider.
+
+3. **Reversal if Target 4 fails**  
+   If price touches T4 for N bars without a close break → **REV** from T4 back toward **Target 1 / Decider**.
+
+| Signal | Meaning |
+|--------|---------|
+| `BUY T1` | Upside Decider → T1 |
+| `DN T1` | Downside Decider → T1 |
+| `EXTEND` | T1 broken → hold/add for T4 |
+| `REV DN` / `REV UP` | T4 failed → reverse to T1/Decider |
+| `STOP` / `TARGET` | Exit markers |
+
+## Stop (adjustable)
+
+Settings → **Stop — adjustable**:
+
+- **Beyond Decider × B** — stop past Decider by `Stop size × B` (default)
+- **Fixed Points** — absolute premium points
+- **ATR ×** — `Stop size × ATR`
+
+Optional: trail stop to Decider after T1 break.
 
 ## Defaults (IST)
 
@@ -39,7 +59,7 @@ Alerts are included for BUY and EXIT.
 
 ## Files
 
-- `Options_Buy_Decider_Targets.pine` — **use this**
+- `Options_Buy_Decider_Targets.pine` — **use this** (paste into TradingView)
 - `Smart_Robotic_Logic_Decider_Targets.pine` — earlier vendor reverse-engineer (abandoned)
 
 ## Not financial advice
