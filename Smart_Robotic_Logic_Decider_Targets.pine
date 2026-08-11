@@ -7,36 +7,31 @@
 //   Targets = C +/- {1, 1.54, 1.83, 2.08}*B
 //
 // SEGMENT + EXTEND:
-//   ROBOT: Extend = lookback only (changes H/L => Decider/Targets move on Y).
-//          Lines use a FIXED bar length (not Extend, not extend.right full chart).
-//   INDIAN: levels fixed (prior day). Extend = line length only.
-//
-// Vendor Robot PUT 24500:
-//   Ext 50 => Decider 72.22/71.59  H~77.15 L~66.65
-//   Ext 60 => Decider 65.97/65.48  H~69.75 L~61.70
-//
-// Why shift[60] failed: window [60,120) reached open crash => L~29.
-// Default is now Last Ext bars after Start HHMM (skip open).
+//   ROBOT: Extend changes lookback => H/L/Decider/Targets MUST move.
+//          Uses NON-OVERLAPPING window: bars [Extend .. 2*Extend) ago.
+//          (Last-N is nested: last50 ⊂ last60, so H/L often identical — that was the bug.)
+//          Robot levels are LIVE (no freeze) so Extend edits always show new values.
+//          Lines use fixed length (not Extend).
+//   INDIAN: prior-day H/L frozen. Extend = line length only.
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
-extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: lookback bars (changes Decider/Targets). INDIAN: visual line length only.")
+extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: non-overlapping lookback [Ext, 2Ext) — must change Decider when edited. INDIAN: line length only.")
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpMain)
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
 grpRobot = "Robot Prediction"
-robotStartHhmm = input.int(1000, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "Skip bars before this time. 1000 avoids open L~29 spike. Try 1015 if L still low.")
-robotWindow = input.string("Last Ext bars", "Robot Window", options = ["Last Ext bars", "First Ext bars", "Shifted [Ext, 2Ext)"], group = grpRobot, tooltip = "Last Ext = most recent Extend bars after Start. Prefer this over Shifted (Shifted Ext60 pulled L~29).")
+robotStartHhmm = input.int(1000, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "Ignore bars before this time (avoids open crash lows).")
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
-robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot, tooltip = "Fixed line length for Robot. NOT tied to Extend.")
+robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
 robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
-grpSnap = "Snapshot / Indian Lines"
-forceRecalc = input.bool(false, "Force Recalculate Now", group = grpSnap)
+grpSnap = "Indian Freeze / Lines"
+forceRecalc = input.bool(false, "Force Recalculate Now (Indian)", group = grpSnap)
 indianLineLeft = input.int(60, "Indian Line Left (bars)", minval = 0, maxval = 500, group = grpSnap)
 indianExtraRight = input.int(0, "Indian Extra Right (bars)", minval = 0, maxval = 500, group = grpSnap)
 
@@ -114,7 +109,42 @@ f_prior_day_hl() =>
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
 
-f_robot_hl(int len, int startHhmm, string winMode, string hSrc, string lSrc) =>
+// ROBOT: NON-OVERLAPPING block bars [len, 2*len) ago — Ext50 and Ext60 are different sets.
+// No last-N fallback (that made 50 and 60 identical).
+f_robot_hl(int len, int startHhmm, string hSrc, string lSrc) =>
+    float h = na
+    float l = na
+    int cnt = 0
+    int tFrom = na
+    int tTo = na
+    int d0 = dayofmonth(time, tz)
+    int m0 = month(time, tz)
+    int y0 = year(time, tz)
+    int iFrom = len
+    int iTo = 2 * len - 1
+    if iFrom <= bar_index
+        int iEnd = math.min(iTo, bar_index)
+        for i = iFrom to iEnd
+            if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
+                float bh = f_pick_h(i, hSrc)
+                float bl = f_pick_l(i, lSrc)
+                h := na(h) ? bh : math.max(h, bh)
+                l := na(l) ? bl : math.min(l, bl)
+                cnt += 1
+                tFrom := na(tFrom) ? time[i] : math.min(tFrom, time[i])
+                tTo := na(tTo) ? time[i] : math.max(tTo, time[i])
+    [h, l, cnt, iFrom, iTo, tFrom, tTo]
+
+[hRob, lRob, nRob, i0, i1, t0, t1] = f_robot_hl(extendIn, robotStartHhmm, robotHSource, robotLSource)
+
+rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
+rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
+
+liveC = (rawH + rawL) / 2.0
+liveB = (rawH - rawL) / 2.0
+
+// Compare helper: what last-N would have given (to prove why old mode stuck)
+f_last_n(int len, int startHhmm, string hSrc, string lSrc) =>
     float h = na
     float l = na
     int cnt = 0
@@ -122,76 +152,24 @@ f_robot_hl(int len, int startHhmm, string winMode, string hSrc, string lSrc) =>
     int m0 = month(time, tz)
     int y0 = year(time, tz)
     int maxScan = math.min(bar_index, 5000)
-
-    if winMode == "Shifted [Ext, 2Ext)"
-        int iFrom = len
-        int iTo = math.min(2 * len - 1, bar_index)
-        if iFrom <= iTo
-            for i = iFrom to iTo
-                if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                    float bh = f_pick_h(i, hSrc)
-                    float bl = f_pick_l(i, lSrc)
-                    h := na(h) ? bh : math.max(h, bh)
-                    l := na(l) ? bl : math.min(l, bl)
-                    cnt += 1
-        if cnt < math.max(5, int(len * 0.25))
-            h := na
-            l := na
-            cnt := 0
-            for i = 1 to maxScan
-                if cnt >= len
-                    break
-                if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                    float bh = f_pick_h(i, hSrc)
-                    float bl = f_pick_l(i, lSrc)
-                    h := na(h) ? bh : math.max(h, bh)
-                    l := na(l) ? bl : math.min(l, bl)
-                    cnt += 1
-                else if not f_same_day(i, d0, m0, y0)
-                    break
-    else if winMode == "First Ext bars"
-        int dayBars = 0
-        for i = 1 to maxScan
-            if f_same_day(i, d0, m0, y0)
-                dayBars += 1
-            else
-                break
-        if dayBars > 0
-            for i = dayBars to 1
-                if f_hhmm(i) >= startHhmm
-                    float bh = f_pick_h(i, hSrc)
-                    float bl = f_pick_l(i, lSrc)
-                    h := na(h) ? bh : math.max(h, bh)
-                    l := na(l) ? bl : math.min(l, bl)
-                    cnt += 1
-                    if cnt >= len
-                        break
-    else
-        // Last Ext bars after Start — default
-        for i = 1 to maxScan
-            if cnt >= len
-                break
-            if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                float bh = f_pick_h(i, hSrc)
-                float bl = f_pick_l(i, lSrc)
-                h := na(h) ? bh : math.max(h, bh)
-                l := na(l) ? bl : math.min(l, bl)
-                cnt += 1
-            else if not f_same_day(i, d0, m0, y0)
-                break
+    for i = 1 to maxScan
+        if cnt >= len
+            break
+        if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
+            float bh = f_pick_h(i, hSrc)
+            float bl = f_pick_l(i, lSrc)
+            h := na(h) ? bh : math.max(h, bh)
+            l := na(l) ? bl : math.min(l, bl)
+            cnt += 1
+        else if not f_same_day(i, d0, m0, y0)
+            break
     [h, l, cnt]
 
-[hRob, lRob, nRob] = f_robot_hl(extendIn, robotStartHhmm, robotWindow, robotHSource, robotLSource)
+[hLast50, lLast50, nLast50] = f_last_n(50, robotStartHhmm, robotHSource, robotLSource)
+[hLast60, lLast60, nLast60] = f_last_n(60, robotStartHhmm, robotHSource, robotLSource)
+lastNsame = not na(hLast50) and hLast50 == hLast60 and lLast50 == lLast60
 
-rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
-rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
-
-winTag = robotWindow == "Shifted [Ext, 2Ext)" ? "shift" : robotWindow == "First Ext bars" ? "first" : "last"
-srcTxt = isIndian ? "INDIAN prior-day FIXED | Ext=line length" : ("ROBOT " + winTag + "[" + str.tostring(extendIn) + "] >=" + str.tostring(robotStartHhmm) + " n=" + str.tostring(nRob))
-
-liveC = (rawH + rawL) / 2.0
-liveB = (rawH - rawL) / 2.0
-
+// INDIAN only: freeze prior-day levels (Extend must not change them)
 var float frozenC = na
 var float frozenB = na
 var float frozenH = na
@@ -200,22 +178,12 @@ var string frozenSeg = "INIT"
 var int frozenDate = -1
 var int frozenHyb = -1
 var int frozenForce = -1
-var int frozenExt = -999
-var int frozenStart = -1
-var string frozenWin = "INIT"
-var string frozenHS = "INIT"
-var string frozenLS = "INIT"
-var int frozenN = -1
 
 hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
-baseChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
-robotChanged = baseChanged or extendIn != frozenExt or robotStartHhmm != frozenStart or robotWindow != frozenWin or robotHSource != frozenHS or robotLSource != frozenLS
-recipeChanged = isIndian ? baseChanged : robotChanged
-canSnap = enableLevels and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
-shouldSnapshot = canSnap and (recipeChanged or na(frozenC))
-
-if shouldSnapshot
+indianChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
+canSnapIndian = enableLevels and isIndian and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
+if canSnapIndian and (indianChanged or na(frozenC))
     frozenC := liveC
     frozenB := liveB
     frozenH := rawH
@@ -224,15 +192,14 @@ if shouldSnapshot
     frozenDate := anchorDate
     frozenHyb := hybFlag
     frozenForce := forceFlag
-    frozenExt := extendIn
-    frozenStart := robotStartHhmm
-    frozenWin := robotWindow
-    frozenHS := robotHSource
-    frozenLS := robotLSource
-    frozenN := isRobot ? nRob : 0
 
-C = frozenC
-B = frozenB
+// ROBOT = always LIVE from Extend window (guarantees Ext edit updates levels)
+// INDIAN = frozen prior-day
+C = isRobot ? liveC : frozenC
+B = isRobot ? liveB : frozenB
+dispH = isRobot ? rawH : frozenH
+dispL = isRobot ? rawL : frozenL
+
 decHi = C + deciderFrac * B
 decLo = C - deciderFrac * B
 upT1 = C + t1Ratio * B
@@ -259,15 +226,8 @@ f_clear() =>
 
 f_level(float price, string txt, color lineCol, bool showLine) =>
     if not na(price) and showLine
-        int x1 = 0
-        int x2 = 0
-        if isRobot
-            // Fixed short segment — Extend does not control length
-            x1 := bar_index - robotLineLeft
-            x2 := bar_index + robotLineRight
-        else
-            x1 := bar_index - indianLineLeft
-            x2 := bar_index + indianRight
+        int x1 = isRobot ? bar_index - robotLineLeft : bar_index - indianLineLeft
+        int x2 = isRobot ? bar_index + robotLineRight : bar_index + indianRight
         line ln = line.new(x1, price, x2, price, xloc = xloc.bar_index, extend = extend.none, color = lineCol, style = line.style_dashed, width = lineWidth)
         array.push(lines, ln)
         if showLabels
@@ -294,22 +254,28 @@ if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
 
 bgcolor(color.new(color.black, 100))
 plot(close, title = "seed", display = display.none)
-plot(enableLevels ? frozenH : na, "Window High", display = display.data_window)
-plot(enableLevels ? frozenL : na, "Window Low", display = display.data_window)
+plot(enableLevels ? dispH : na, "Window High", display = display.data_window)
+plot(enableLevels ? dispL : na, "Window Low", display = display.data_window)
 plot(enableLevels ? C : na, "Centre C", color = clrCenter, display = display.data_window)
 plot(enableLevels ? B : na, "Base B", color = clrCenter, display = display.data_window)
 plot(enableLevels and showDecider ? decHi : na, "Decider High", color = clrDecider, display = display.data_window)
 plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = clrDecider, display = display.data_window)
 
-var table info = table.new(position.top_right, 1, 5, bgcolor = color.new(color.black, 80), border_width = 0)
+var table info = table.new(position.top_right, 1, 6, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
-    extNote = isIndian ? "Ext=LINE LEN" : "Ext=LOOKBACK (levels move)"
-    table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + " | " + extNote, text_color = color.white, text_size = size.small)
-    table.cell(info, 0, 1, srcTxt, text_color = color.aqua, text_size = size.small)
-    hlTxt = na(frozenH) ? "..." : ("H " + str.tostring(frozenH, format.mintick) + "  L " + str.tostring(frozenL, format.mintick) + "  n=" + str.tostring(frozenN))
-    table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)
-    cbTxt = na(C) ? "Waiting..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick) + "  FROZEN")
-    table.cell(info, 0, 3, cbTxt, text_color = color.yellow, text_size = size.small)
-    decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick) + "  aim50:72.22/71.59 aim60:65.97/65.48")
-    table.cell(info, 0, 4, decTxt, text_color = color.orange, text_size = size.tiny)
+    table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + (isRobot ? " | LIVE levels" : " | FROZEN levels"), text_color = color.white, text_size = size.small)
+    if isRobot
+        winTxt = "bars[" + str.tostring(i0) + ".." + str.tostring(i1) + "] n=" + str.tostring(nRob) + " >=" + str.tostring(robotStartHhmm)
+        table.cell(info, 0, 1, winTxt, text_color = color.aqua, text_size = size.small)
+        // Prove old last-N bug: if true, last50 and last60 H/L identical
+        table.cell(info, 0, 2, lastNsame ? "NOTE: last50==last60 (old bug)" : "last50!=last60 OK", text_color = lastNsame ? color.red : color.green, text_size = size.tiny)
+    else
+        table.cell(info, 0, 1, "prior-day | Ext=line length only", text_color = color.aqua, text_size = size.small)
+        table.cell(info, 0, 2, "", text_color = color.gray, text_size = size.tiny)
+    hlTxt = na(dispH) ? "Waiting for window..." : ("H " + str.tostring(dispH, format.mintick) + "  L " + str.tostring(dispL, format.mintick))
+    table.cell(info, 0, 3, hlTxt, text_color = color.silver, text_size = size.small)
+    cbTxt = na(C) ? "..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick))
+    table.cell(info, 0, 4, cbTxt, text_color = color.yellow, text_size = size.small)
+    decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick))
+    table.cell(info, 0, 5, decTxt, text_color = color.orange, text_size = size.small)
