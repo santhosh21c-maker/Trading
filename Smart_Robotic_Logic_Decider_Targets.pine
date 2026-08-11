@@ -8,7 +8,8 @@
 //
 // SEGMENT + EXTEND:
 //   ROBOT: Extend changes lookback => H/L/Decider/Targets MUST move.
-//          Uses NON-OVERLAPPING window: bars [Extend .. 2*Extend) ago.
+//          Window = bars [Extend .. Extend+Width) ago (default Width=30).
+//          Ext50 => [50..79], Ext60 => [60..89] — different bars.
 //          (Last-N is nested: last50 ⊂ last60, so H/L often identical — that was the bug.)
 //          Robot levels are LIVE (no freeze) so Extend edits always show new values.
 //          Lines use fixed length (not Extend).
@@ -19,7 +20,7 @@ indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines
 grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
-extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: non-overlapping lookback [Ext, 2Ext) — must change Decider when edited. INDIAN: line length only.")
+extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: lookback offset — window is bars [Ext .. Ext+Width). Changing Ext must move Decider. INDIAN: line length only.")
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpMain)
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
