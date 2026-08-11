@@ -1,13 +1,19 @@
 //@version=6
 // Smart Robotic Logic - Decider and Targets (Educational recreation)
 //
-// C = (H+L)/2 , B = (H-L)/2
-// Decider = C +/- 0.06*B
-// Target N = C +/- {1, 1.54, 1.83, 2.08} * B
+// LADDER (both segments):
+//   C = (H+L)/2 , B = (H-L)/2
+//   Decider = C +/- 0.06*B
+//   Target N = C +/- {1, 1.54, 1.83, 2.08} * B
 //
-// INDIAN  -> last Length bars BEFORE today (prior sessions only)
-// ROBOT   -> last Length bars OF today only (excludes yesterday's 29-30 lows)
-//             PUT L50 vendor: H=77.15 L=66.65 -> Dec 72.22/71.59
+// SEGMENT LOOKBACK (key difference):
+//   INDIAN  -> 5m hybrid, last Length bars BEFORE today
+//              PUT L80: H=48.30 L=30.75 -> Dec 40.05/39.00
+//   ROBOT   -> 1m chart TF, last Length RTH bars (0915-1530)
+//              Hybrid OFF for H/L (vendor Length applies on 1m)
+//              PUT L50 at 11:00: H=77.15 L=66.65 -> Dec 72.22/71.59
+//
+// Levels FROZEN when Segment/Length changes (like vendor).
 
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
@@ -17,7 +23,7 @@ enableLevels = input.bool(true, "Enable Automated Levels", group = grpRobot)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpRobot)
 lengthIn = input.int(50, "Extend => Length", minval = 2, maxval = 500, group = grpRobot)
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpRobot)
-hybrid5m = input.bool(true, "Hybrid (Force 5 Min Values)", group = grpRobot)
+hybrid5m = input.bool(true, "Hybrid (Force 5 Min Values)", group = grpRobot, tooltip = "INDIAN uses 5m for H/L. Robot uses 1m chart bars for Length (matches vendor).")
 winMode = input.string("Current", "Window Mode", options = ["Current", "Future"], group = grpRobot)
 
 grpSnap = "Snapshot / Freeze"
@@ -51,50 +57,54 @@ lineWidth = input.int(1, "Line Width", minval = 1, maxval = 3, group = grpStyle)
 isIndian = segment == "INDIAN - Index, Stock & Option"
 
 // ---- H/L LOOKUP ----
+// INDIAN: prior calendar days on 5m (excludes today)
 f_hl_indian(int len) =>
     float h = na
     float l = na
     int cnt = 0
-    int todayStart = time("D")
+    int d0 = dayofmonth(time)
+    int m0 = month(time)
+    int y0 = year(time)
     int maxScan = math.min(bar_index, 5000)
     for i = 1 to maxScan
         if cnt >= len
             break
-        if time[i] < todayStart
+        bool priorDay = dayofmonth(time[i]) != d0 or month(time[i]) != m0 or year(time[i]) != y0
+        if priorDay
             h := na(h) ? high[i] : math.max(h, high[i])
             l := na(l) ? low[i] : math.min(l, low[i])
             cnt += 1
     [h, l]
 
-// ROBOT: last N bars of TODAY only (post-gap session range, not prior-day lows)
+// ROBOT: last Length bars on CHART TF inside NSE RTH (skips gap candle if len < bars since open)
 f_hl_robot(int len, string mode) =>
     float h = na
     float l = na
     int cnt = 0
-    int todayStart = time("D")
     int startI = mode == "Future" ? 0 : 1
     int maxScan = math.min(bar_index, 5000)
     for i = startI to maxScan
         if cnt >= len
             break
-        if time[i] >= todayStart
+        bool inRth = not na(time("1", "0915-1530", time[i]))
+        if inRth
             h := na(h) ? high[i] : math.max(h, high[i])
             l := na(l) ? low[i] : math.min(l, low[i])
             cnt += 1
     [h, l]
 
 [hIndOwn, lIndOwn] = f_hl_indian(lengthIn)
-[hRobOwn, lRobOwn] = f_hl_robot(lengthIn, winMode)
 [hInd5, lInd5] = request.security(syminfo.tickerid, "5", f_hl_indian(lengthIn), lookahead = barmerge.lookahead_off)
-[hRob5, lRob5] = request.security(syminfo.tickerid, "5", f_hl_robot(lengthIn, winMode), lookahead = barmerge.lookahead_off)
+[hRob1m, lRob1m] = f_hl_robot(lengthIn, winMode)
 
-rawH = isIndian ? (hybrid5m ? hInd5 : hIndOwn) : (hybrid5m ? hRob5 : hRobOwn)
-rawL = isIndian ? (hybrid5m ? lInd5 : lIndOwn) : (hybrid5m ? lRob5 : lRobOwn)
+// INDIAN -> 5m hybrid | ROBOT -> always 1m chart bars for Length
+rawH = isIndian ? (hybrid5m ? hInd5 : hIndOwn) : hRob1m
+rawL = isIndian ? (hybrid5m ? lInd5 : lIndOwn) : lRob1m
 
 liveC = (rawH + rawL) / 2.0
 liveB = (rawH - rawL) / 2.0
 
-// ---- FREEZE ----
+// ---- FREEZE on input change (last bar) ----
 var float frozenC = na
 var float frozenB = na
 var float frozenH = na
@@ -104,19 +114,14 @@ var string frozenSeg = ""
 var int frozenDate = na
 var int frozenHyb = -1
 var int frozenForce = -1
-var int frozenSess = na
 
 hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
-curSess = time("D")
 
 inputsChanged = lengthIn != frozenLen or segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
-sessionOpenBar = ta.change(curSess) != 0 and time >= anchorDate
 hasFrozen = not na(frozenC)
 
-robotSnapshot = not isIndian and barstate.islast and (not hasFrozen or inputsChanged)
-indianSnapshot = isIndian and (not hasFrozen or inputsChanged or (sessionOpenBar and curSess != frozenSess))
-shouldSnapshot = enableLevels and not na(liveC) and not na(liveB) and liveB > 0 and (robotSnapshot or indianSnapshot)
+shouldSnapshot = enableLevels and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0 and (not hasFrozen or inputsChanged)
 
 if shouldSnapshot
     frozenC := liveC
@@ -128,7 +133,6 @@ if shouldSnapshot
     frozenDate := anchorDate
     frozenHyb := hybFlag
     frozenForce := forceFlag
-    frozenSess := curSess
 
 C = frozenC
 B = frozenB
@@ -204,9 +208,8 @@ plot(enableLevels and showDnTgts ? dnT4 : na, "Dn T4", color = clrT4, display = 
 var table info = table.new(position.top_right, 1, 3, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
-    tfTxt = hybrid5m ? "5m Hybrid" : timeframe.period
-    srcTxt = isIndian ? "prior-day" : "today-only"
-    table.cell(info, 0, 0, segShort + " | Len " + str.tostring(lengthIn) + " | " + tfTxt + " | " + srcTxt, text_color = color.white, text_size = size.small)
+    tfTxt = isIndian ? (hybrid5m ? "5m prior-day" : "chart prior-day") : "1m RTH last-N"
+    table.cell(info, 0, 0, segShort + " | Len " + str.tostring(lengthIn) + " | " + tfTxt, text_color = color.white, text_size = size.small)
     hlTxt = na(frozenH) ? "..." : ("H " + str.tostring(frozenH, format.mintick) + "  L " + str.tostring(frozenL, format.mintick))
     table.cell(info, 0, 1, hlTxt, text_color = color.silver, text_size = size.small)
     cbTxt = na(C) ? "Waiting snapshot..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick) + "  FROZEN")
