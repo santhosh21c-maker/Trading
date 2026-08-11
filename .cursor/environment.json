@@ -1,0 +1,5 @@
+{
+  "name": "Trading – Pine Script",
+  "user": "ubuntu",
+  "install": "./scripts/cloud-agent-install.sh"
+}
