@@ -1,182 +1,147 @@
 //@version=5
-// Smart Robotic Logic – Decider & Targets (Educational recreation)
+// Smart Robotic Logic - Decider & Targets (Educational recreation)
 //
-// Verified from your 7-screenshot sequence (11 Aug 24500 CE/PE):
+// STATIC: levels do NOT move bar-to-bar. They only recalculate when
+//         Segment or Length (or Date / Hybrid) inputs change.
 //
-//   STATIC: levels do NOT move bar-to-bar. They only recalculate when
-//           Segment or Length (or Date / Hybrid) inputs change.
+// LADDER (same on Indian & Robot Prediction once C and B are known):
+//         Decider  = C +/- 0.06*B     (gap = 0.12*B)
+//         Target1  = C +/- 1.00*B
+//         Target2  = C +/- 1.54*B
+//         Target3  = C +/- 1.83*B
+//         Target4  = C +/- 2.08*B
 //
-//   LADDER (same on Indian & Robot Prediction once C and B are known):
-//           Decider  = C ± 0.06·B     (gap = 0.12·B)
-//           Target1  = C ± 1.00·B
-//           Target2  = C ± 1.54·B
-//           Target3  = C ± 1.83·B
-//           Target4  = C ± 2.08·B
-//
-//   SEGMENT: "INDIAN - Index, Stock & Option" and "Robot Prediction"
-//           use DIFFERENT recipes for C and B (same ladder afterward).
+// SEGMENT: "INDIAN - Index, Stock & Option" and "Robot Prediction"
+//         use DIFFERENT recipes for C and B (same ladder afterward).
 //
 // Measured examples (PUT 24500):
-//   Indian  L80 → C≈39.53  B≈8.78   Decider ≈ 40.05 / 39.00
-//   Robot   L50 → C≈71.91  B≈5.25   Decider ≈ 72.22 / 71.59
-//   Robot   L60 → C≈63.35  B≈3.85   Decider ≈ 63.58 / 63.12
+//   Indian  L80 -> C~39.53  B~8.78   Decider ~ 40.05 / 39.00
+//   Robot   L50 -> C~71.91  B~5.25   Decider ~ 72.22 / 71.59
+//   Robot   L60 -> C~63.35  B~3.85   Decider ~ 63.58 / 63.12
 
-indicator("Smart Robotic Logic – Decider & Targets", overlay=true, max_lines_count=500, max_labels_count=500)
+indicator("Smart Robotic Logic - Decider & Targets", overlay = true, max_lines_count = 500, max_labels_count = 500)
 
-// ═══════════════════════════════════════════════════════════════
-// INPUTS  (mirrors vendor settings you showed)
-// ═══════════════════════════════════════════════════════════════
-grpRobot     = "Robot Targets"
-enableLevels = input.bool(true, "Enable Automated Levels", group=grpRobot)
+// ---- INPUTS ----
+string grpRobot = "Robot Targets"
+bool   enableLevels = input.bool(true, "Enable Automated Levels", group = grpRobot)
 
-segment      = input.string("Robot Prediction", "Segment",
-     options=["INDIAN - Index, Stock & Option", "Robot Prediction"], group=grpRobot,
-     tooltip="Indian and Robot Prediction produce different C/B (different centre & base). Ladder ratios stay the same.")
+string segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpRobot)
 
-lengthIn     = input.int(50, "Extend => Length", minval=2, maxval=500, group=grpRobot,
-     tooltip="Calculation window size. Changing 50→60 freezes a NEW ladder; levels then stay fixed until you change it again.")
+int lengthIn = input.int(50, "Extend => Length", minval = 2, maxval = 500, group = grpRobot)
 
-anchorDate   = input.time(timestamp("2026-08-11T00:00:00"), "Anchor Date", group=grpRobot,
-     tooltip="Matches the vendor date picker. Used as session/day anchor for the snapshot.")
+int anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpRobot)
 
-hybrid5m     = input.bool(true, "Hybrid (Force 5 Min Values)", group=grpRobot,
-     tooltip="Build C/B from 5-minute bars even on a 1-minute options chart.")
+bool hybrid5m = input.bool(true, "Hybrid (Force 5 Min Values)", group = grpRobot)
 
-winMode      = input.string("Current", "Window Mode", options=["Current", "Future"], group=grpRobot,
-     tooltip="Current = confirmed bars only. Future = include forming bar.")
+string winMode = input.string("Current", "Window Mode", options = ["Current", "Future"], group = grpRobot)
 
-// Optional: Indian segment can pull H/L/C from an index ticker instead of the option
-grpIndian    = "INDIAN Segment Source"
-useIndexForIndian = input.bool(false, "Use Index Symbol for Indian C/B", group=grpIndian,
-     tooltip="If on, Indian segment reads H/L/C from the index symbol below (via request.security).")
-indexSymbol  = input.symbol("NSE:NIFTY", "Index Symbol", group=grpIndian)
+string grpIndian = "INDIAN Segment Source"
+bool   useIndexForIndian = input.bool(false, "Use Index Symbol for Indian C/B", group = grpIndian)
+string indexSymbol = input.symbol("NSE:NIFTY", "Index Symbol", group = grpIndian)
 
-grpSnap      = "Snapshot / Freeze"
-// Levels freeze after each input-driven recalculation (matches your observation)
-forceRecalc  = input.bool(false, "Force Recalculate Now", group=grpSnap,
-     tooltip="Toggle off→on→off to take a fresh snapshot without changing Length/Segment.")
+string grpSnap = "Snapshot / Freeze"
+bool   forceRecalc = input.bool(false, "Force Recalculate Now", group = grpSnap)
+int    extendRight = input.int(50, "Extend Lines Right (bars)", minval = 0, maxval = 500, group = grpSnap)
+int    extendLeft = input.int(120, "Extend Lines Left (bars)", minval = 0, maxval = 500, group = grpSnap)
 
-extendRight  = input.int(50, "Extend Lines Right (bars)", minval=0, maxval=500, group=grpSnap)
-extendLeft   = input.int(120,"Extend Lines Left (bars)",  minval=0, maxval=500, group=grpSnap)
+string grpShow = "Show / Hide"
+bool showDecider = input.bool(true, "Show Decider", group = grpShow)
+bool showUpTgts = input.bool(true, "Show Upper Targets", group = grpShow)
+bool showDnTgts = input.bool(true, "Show Lower Targets", group = grpShow)
+bool showLabels = input.bool(true, "Show Labels", group = grpShow)
+bool showCenter = input.bool(false, "Show Centre C", group = grpShow)
 
-grpShow      = "Show / Hide"
-showDecider  = input.bool(true,  "Show Decider", group=grpShow)
-showUpTgts   = input.bool(true,  "Show Upper Targets", group=grpShow)
-showDnTgts   = input.bool(true,  "Show Lower Targets", group=grpShow)
-showLabels   = input.bool(true,  "Show Labels", group=grpShow)
-showCenter   = input.bool(false, "Show Centre C", group=grpShow)
+string grpLadder = "Ladder (x Base B)"
+float deciderFrac = input.float(0.06, "Decider +/- x B", step = 0.001, group = grpLadder)
+float t1Ratio = input.float(1.00, "Target 1 x B", step = 0.01, group = grpLadder)
+float t2Ratio = input.float(1.54, "Target 2 x B", step = 0.01, group = grpLadder)
+float t3Ratio = input.float(1.83, "Target 3 x B", step = 0.01, group = grpLadder)
+float t4Ratio = input.float(2.08, "Target 4 x B", step = 0.01, group = grpLadder)
 
-grpLadder    = "Ladder (× Base B) — verified"
-deciderFrac  = input.float(0.06, "Decider ± × B", step=0.001, group=grpLadder)
-t1Ratio      = input.float(1.00, "Target 1 × B", step=0.01, group=grpLadder)
-t2Ratio      = input.float(1.54, "Target 2 × B", step=0.01, group=grpLadder)
-t3Ratio      = input.float(1.83, "Target 3 × B", step=0.01, group=grpLadder)
-t4Ratio      = input.float(2.08, "Target 4 × B", step=0.01, group=grpLadder)
+string grpTune = "Tune C / B per Segment"
+string robotCenter = input.string("Pivot (H+L+C)/3", "Robot - Centre", options = ["Pivot (H+L+C)/3", "Close", "HL2 (H+L)/2"], group = grpTune)
+float  robotBaseFrac = input.float(0.382, "Robot - B = Range x", step = 0.001, group = grpTune)
+string indianCenter = input.string("Pivot (H+L+C)/3", "Indian - Centre", options = ["Pivot (H+L+C)/3", "Close", "HL2 (H+L)/2"], group = grpTune)
+float  indianBaseFrac = input.float(0.500, "Indian - B = Range x", step = 0.001, group = grpTune)
 
-// Segment-specific base fractions (starting points — tune until Target 1 matches vendor)
-grpTune      = "Tune C / B per Segment"
-robotCenter  = input.string("Pivot (H+L+C)/3", "Robot – Centre",
-     options=["Pivot (H+L+C)/3", "Close", "HL2 (H+L)/2"], group=grpTune)
-robotBaseFrac= input.float(0.382, "Robot – B = Range ×", step=0.001, group=grpTune)
-indianCenter = input.string("Pivot (H+L+C)/3", "Indian – Centre",
-     options=["Pivot (H+L+C)/3", "Close", "HL2 (H+L)/2"], group=grpTune)
-indianBaseFrac = input.float(0.500, "Indian – B = Range ×", step=0.001, group=grpTune,
-     tooltip="Indian often needs a different base fraction than Robot Prediction.")
+string grpStyle = "Colors"
+color colDecider = input.color(color.new(#9E9E9E, 0), "Decider", group = grpStyle)
+color colT1 = input.color(color.new(#26A69A, 0), "Target 1", group = grpStyle)
+color colT2 = input.color(color.new(#FF9800, 0), "Target 2", group = grpStyle)
+color colT3 = input.color(color.new(#EC407A, 0), "Target 3", group = grpStyle)
+color colT4 = input.color(color.new(#AB47BC, 0), "Target 4", group = grpStyle)
+color colCenter = input.color(color.new(#787B86, 0), "Centre", group = grpStyle)
+int   lineWidth = input.int(1, "Line Width", minval = 1, maxval = 3, group = grpStyle)
 
-grpStyle     = "Colors"
-colDecider   = input.color(color.new(#9E9E9E, 0), "Decider",  group=grpStyle)
-colT1        = input.color(color.new(#26A69A, 0), "Target 1", group=grpStyle)
-colT2        = input.color(color.new(#FF9800, 0), "Target 2", group=grpStyle)
-colT3        = input.color(color.new(#EC407A, 0), "Target 3", group=grpStyle)
-colT4        = input.color(color.new(#AB47BC, 0), "Target 4", group=grpStyle)
-colCenter    = input.color(color.new(#787B86, 0), "Centre",   group=grpStyle)
-lineWidth    = input.int(1, "Line Width", minval=1, maxval=3, group=grpStyle)
-
-// ═══════════════════════════════════════════════════════════════
-// LIVE H/L/C ENGINE (used only at snapshot time)
-// ═══════════════════════════════════════════════════════════════
+// ---- LIVE H/L/C (snapshot only) ----
 f_hlc(int len, string mode) =>
     float h = mode == "Future" ? ta.highest(high, len) : ta.highest(high, len)[1]
-    float l = mode == "Future" ? ta.lowest(low, len)  : ta.lowest(low, len)[1]
-    float c = mode == "Future" ? close                 : close[1]
+    float l = mode == "Future" ? ta.lowest(low, len) : ta.lowest(low, len)[1]
+    float c = mode == "Future" ? close : close[1]
     [h, l, c]
 
 f_center(float h, float l, float c, string mode) =>
     switch mode
-        "Close"       => c
+        "Close" => c
         "HL2 (H+L)/2" => (h + l) / 2.0
         => (h + l + c) / 3.0
 
 [hOwn, lOwn, cOwn] = f_hlc(lengthIn, winMode)
-[h5, l5, c5]       = request.security(syminfo.tickerid, "5", f_hlc(lengthIn, winMode), lookahead=barmerge.lookahead_off)
-[hIdx, lIdx, cIdx] = request.security(indexSymbol, hybrid5m ? "5" : timeframe.period, f_hlc(lengthIn, winMode), lookahead=barmerge.lookahead_off)
+[h5, l5, c5] = request.security(syminfo.tickerid, "5", f_hlc(lengthIn, winMode), lookahead = barmerge.lookahead_off)
+[hIdx, lIdx, cIdx] = request.security(indexSymbol, hybrid5m ? "5" : timeframe.period, f_hlc(lengthIn, winMode), lookahead = barmerge.lookahead_off)
 
 bool isIndian = segment == "INDIAN - Index, Stock & Option"
 
 float rawH = isIndian and useIndexForIndian ? hIdx : (hybrid5m ? h5 : hOwn)
 float rawL = isIndian and useIndexForIndian ? lIdx : (hybrid5m ? l5 : lOwn)
-float rawC = isIndian and useIndexForIndian ? cIdx : (hybrid5m ? c5 : cOwn)
+float rawCl = isIndian and useIndexForIndian ? cIdx : (hybrid5m ? c5 : cOwn)
 float rawRng = rawH - rawL
 
 string cMode = isIndian ? indianCenter : robotCenter
-float  bFrac = isIndian ? indianBaseFrac : robotBaseFrac
+float bFrac = isIndian ? indianBaseFrac : robotBaseFrac
 
-float liveC = f_center(rawH, rawL, rawC, cMode)
+float liveC = f_center(rawH, rawL, rawCl, cMode)
 float liveB = rawRng * bFrac
 
-// ═══════════════════════════════════════════════════════════════
-// FREEZE: snapshot C/B only when inputs change (or first run)
-// This is what makes levels "stay constant till Length/Segment changes"
-// ═══════════════════════════════════════════════════════════════
+// ---- FREEZE on input change ----
 var float frozenC = na
 var float frozenB = na
-var int   frozenLen = na
-var string frozenSeg = na
-var int   frozenDate = na
-var bool  frozenHyb = na
-var bool  frozenForce = na
-var float frozenH = na
-var float frozenL = na
-var float frozenCl = na
+var int frozenLen = na
+var string frozenSeg = ""
+var int frozenDate = na
+var int frozenHyb = -1
+var int frozenForce = -1
 
-bool inputsChanged =
-     na(frozenC) or
-     lengthIn != frozenLen or
-     segment != frozenSeg or
-     anchorDate != frozenDate or
-     hybrid5m != frozenHyb or
-     forceRecalc != frozenForce
+int hybFlag = hybrid5m ? 1 : 0
+int forceFlag = forceRecalc ? 1 : 0
+
+bool inputsChanged = na(frozenC) or lengthIn != frozenLen or segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
 
 if barstate.islast and enableLevels and inputsChanged and not na(liveC) and not na(liveB) and liveB > 0
-    frozenC     := liveC
-    frozenB     := liveB
-    frozenLen   := lengthIn
-    frozenSeg   := segment
-    frozenDate  := anchorDate
-    frozenHyb   := hybrid5m
-    frozenForce := forceRecalc
-    frozenH     := rawH
-    frozenL     := rawL
-    frozenCl    := rawC
+    frozenC := liveC
+    frozenB := liveB
+    frozenLen := lengthIn
+    frozenSeg := segment
+    frozenDate := anchorDate
+    frozenHyb := hybFlag
+    frozenForce := forceFlag
 
 float C = frozenC
 float B = frozenB
 
 float decHi = C + deciderFrac * B
 float decLo = C - deciderFrac * B
-float upT1  = C + t1Ratio * B
-float upT2  = C + t2Ratio * B
-float upT3  = C + t3Ratio * B
-float upT4  = C + t4Ratio * B
-float dnT1  = C - t1Ratio * B
-float dnT2  = C - t2Ratio * B
-float dnT3  = C - t3Ratio * B
-float dnT4  = C - t4Ratio * B
+float upT1 = C + t1Ratio * B
+float upT2 = C + t2Ratio * B
+float upT3 = C + t3Ratio * B
+float upT4 = C + t4Ratio * B
+float dnT1 = C - t1Ratio * B
+float dnT2 = C - t2Ratio * B
+float dnT3 = C - t3Ratio * B
+float dnT4 = C - t4Ratio * B
 
-// ═══════════════════════════════════════════════════════════════
-// DRAW (static lines from frozen ladder)
-// ═══════════════════════════════════════════════════════════════
-var line[]  lines  = array.new_line()
+// ---- DRAW ----
+var line[] lines = array.new_line()
 var label[] labels = array.new_label()
 
 f_clear() =>
@@ -193,50 +158,47 @@ f_level(float price, string txt, color col, bool showLine) =>
     if not na(price) and showLine
         int x1 = bar_index - extendLeft
         int x2 = bar_index + extendRight
-        line ln = line.new(x1, price, x2, price, xloc=xloc.bar_index, extend=extend.none,
-             color=col, style=line.style_dashed, width=lineWidth)
+        line ln = line.new(x1, price, x2, price, xloc = xloc.bar_index, extend = extend.none, color = col, style = line.style_dashed, width = lineWidth)
         array.push(lines, ln)
         if showLabels
-            label lb = label.new(x2, price, txt + " / " + str.tostring(price, format.mintick),
-                 xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left,
-                 color=color.new(col, 85), textcolor=col, size=size.small)
+            label lb = label.new(x2, price, txt + " / " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(col, 85), textcolor = col, size = size.small)
             array.push(labels, lb)
 
 if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
     f_clear()
     if showDecider
-        f_level(decHi, "💔 Decider", colDecider, true)
-        f_level(decLo, "💔 Decider", colDecider, true)
+        f_level(decHi, "Decider", colDecider, true)
+        f_level(decLo, "Decider", colDecider, true)
     if showCenter
         f_level(C, "Centre", colCenter, true)
     if showUpTgts
-        f_level(upT1, "😇 Target 1", colT1, true)
-        f_level(upT2, "🔥 Target 2", colT2, true)
-        f_level(upT3, "🏹 Target 3", colT3, true)
-        f_level(upT4, "👿 Target 4", colT4, true)
+        f_level(upT1, "Target 1", colT1, true)
+        f_level(upT2, "Target 2", colT2, true)
+        f_level(upT3, "Target 3", colT3, true)
+        f_level(upT4, "Target 4", colT4, true)
     if showDnTgts
-        f_level(dnT1, "😇 Target 1", colT1, true)
-        f_level(dnT2, "🔥 Target 2", colT2, true)
-        f_level(dnT3, "🏹 Target 3", colT3, true)
-        f_level(dnT4, "👿 Target 4", colT4, true)
+        f_level(dnT1, "Target 1", colT1, true)
+        f_level(dnT2, "Target 2", colT2, true)
+        f_level(dnT3, "Target 3", colT3, true)
+        f_level(dnT4, "Target 4", colT4, true)
 
-plot(enableLevels ? C : na, "Centre C", color=colCenter, display=display.data_window)
-plot(enableLevels ? B : na, "Base B",   color=colCenter, display=display.data_window)
-plot(enableLevels and showDecider ? decHi : na, "Decider High", color=colDecider, display=display.data_window)
-plot(enableLevels and showDecider ? decLo : na, "Decider Low",  color=colDecider, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT1 : na, "Up T1", color=colT1, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT2 : na, "Up T2", color=colT2, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT3 : na, "Up T3", color=colT3, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT4 : na, "Up T4", color=colT4, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT1 : na, "Dn T1", color=colT1, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT2 : na, "Dn T2", color=colT2, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT3 : na, "Dn T3", color=colT3, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT4 : na, "Dn T4", color=colT4, display=display.data_window)
+plot(enableLevels ? C : na, "Centre C", color = colCenter, display = display.data_window)
+plot(enableLevels ? B : na, "Base B", color = colCenter, display = display.data_window)
+plot(enableLevels and showDecider ? decHi : na, "Decider High", color = colDecider, display = display.data_window)
+plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = colDecider, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT1 : na, "Up T1", color = colT1, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT2 : na, "Up T2", color = colT2, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT3 : na, "Up T3", color = colT3, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT4 : na, "Up T4", color = colT4, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT1 : na, "Dn T1", color = colT1, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT2 : na, "Dn T2", color = colT2, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT3 : na, "Dn T3", color = colT3, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT4 : na, "Dn T4", color = colT4, display = display.data_window)
 
-var table info = table.new(position.top_right, 1, 2, bgcolor=color.new(color.black, 80), border_width=0)
+var table info = table.new(position.top_right, 1, 2, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     string segShort = isIndian ? "INDIAN" : "ROBOT"
     string tfTxt = hybrid5m ? "5m Hybrid" : timeframe.period
-    table.cell(info, 0, 0, segShort + " | Len " + str.tostring(lengthIn) + " | " + tfTxt, text_color=color.white, text_size=size.small)
-    string cbTxt = na(C) ? "Waiting snapshot…" : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick) + "  FROZEN")
-    table.cell(info, 0, 1, cbTxt, text_color=color.yellow, text_size=size.small)
+    table.cell(info, 0, 0, segShort + " | Len " + str.tostring(lengthIn) + " | " + tfTxt, text_color = color.white, text_size = size.small)
+    string cbTxt = na(C) ? "Waiting snapshot..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick) + "  FROZEN")
+    table.cell(info, 0, 1, cbTxt, text_color = color.yellow, text_size = size.small)
