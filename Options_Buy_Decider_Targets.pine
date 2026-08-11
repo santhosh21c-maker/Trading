@@ -1,15 +1,10 @@
 //@version=6
-indicator("Options Buy Decider Targets Signals", overlay=true, max_boxes_count=50, max_lines_count=100, max_labels_count=100)
+indicator("Options Buy Decider Targets", overlay=true, max_boxes_count=50, max_lines_count=100, max_labels_count=100)
 
-// Options buying: Decider / Targets + entry signals
-// Any NIFTY / SENSEX / BANKNIFTY CE or PE strike chart.
-// Ladder: C=(H+L)/2 , B=(H-L)/2
+// Decider and Targets as support / resistance on any option strike chart.
+// Ladder: C = (H+L)/2 , B = (H-L)/2
 // Decider = C +/- 0.06*B
 // Targets = C +/- {1.00, 1.54, 1.83, 2.08}*B
-// Entries both ways:
-// 1) Decider to Target 1
-// 2) If T1 broken -> expect Target 4
-// 3) If T4 fails -> reverse T4 to T1/Decider
 
 grpM = "Mode"
 string i_mode = input.string("INTRADAY", "Mode", options=["INTRADAY", "PREDICTION"], group=grpM)
@@ -32,28 +27,16 @@ float i_t2_r = input.float(1.54, "Target 2 ratio", step=0.01, group=grpR)
 float i_t3_r = input.float(1.83, "Target 3 ratio", step=0.01, group=grpR)
 float i_t4_r = input.float(2.08, "Target 4 ratio", step=0.01, group=grpR)
 
-grpE = "Entry rules"
-float i_dec_zone = input.float(0.35, "Near Decider zone times B", minval=0.05, step=0.05, group=grpE)
-int i_t4_fail_bars = input.int(3, "T4 fail bars", minval=1, maxval=20, group=grpE)
-float i_t4_touch_tol = input.float(0.15, "T4 touch tolerance times B", minval=0.02, step=0.01, group=grpE)
-
-grpS = "Stop adjustable"
-string i_stop_mode = input.string("Beyond Decider x B", "Stop mode", options=["Beyond Decider x B", "Fixed Points", "ATR x"], group=grpS)
-float i_stop_mult = input.float(0.25, "Stop size", minval=0.01, step=0.05, group=grpS)
-bool i_trail_dec = input.bool(true, "After T1 break trail stop to Decider", group=grpS)
-
 grpV = "Visual"
 color c_dec = input.color(color.new(#F5C542, 0), "Decider", group=grpV)
 color c_t1 = input.color(color.new(#4CAF50, 0), "Target 1", group=grpV)
 color c_t2 = input.color(color.new(#2196F3, 0), "Target 2", group=grpV)
 color c_t3 = input.color(color.new(#9C27B0, 0), "Target 3", group=grpV)
 color c_t4 = input.color(color.new(#E91E63, 0), "Target 4", group=grpV)
-color c_buy = input.color(color.new(#00E676, 0), "Buy Upside signals", group=grpV)
-color c_sell = input.color(color.new(#FF5252, 0), "Sell Downside signals", group=grpV)
-color c_rev = input.color(color.new(#FFD600, 0), "Reversal signals", group=grpV)
-bool i_show_hist = input.bool(false, "Show historical OR boxes", group=grpV)
+int i_line_w = input.int(2, "Line width", minval=1, maxval=4, group=grpV)
+bool i_extend_right = input.bool(true, "Extend lines to right", group=grpV)
+bool i_show_or_box = input.bool(true, "Show OR box", group=grpV)
 bool i_show_table = input.bool(true, "Info table", group=grpV)
-bool i_show_stop = input.bool(true, "Plot active stop", group=grpV)
 
 f_hhmm_to_min(int hhmm) =>
     int h = int(math.floor(hhmm / 100))
@@ -69,25 +52,10 @@ f_add_mins(int hhmm, int add) =>
 f_in_win(int t, int a, int b) =>
     hour(t) * 100 + minute(t) >= a and hour(t) * 100 + minute(t) < b
 
-f_stop_long(float dec_lo, float Bv, float atrv) =>
-    float out = dec_lo - i_stop_mult * Bv
-    if i_stop_mode == "Fixed Points"
-        out := dec_lo - i_stop_mult
-    if i_stop_mode == "ATR x"
-        out := dec_lo - i_stop_mult * atrv
-    out
-
-f_stop_short(float dec_hi, float Bv, float atrv) =>
-    float out = dec_hi + i_stop_mult * Bv
-    if i_stop_mode == "Fixed Points"
-        out := dec_hi + i_stop_mult
-    if i_stop_mode == "ATR x"
-        out := dec_hi + i_stop_mult * atrv
-    out
-
 var float or_h = na
 var float or_l = na
 var bool or_done = false
+var int freeze_bar = na
 var box or_box = na
 
 var float H = na
@@ -126,39 +94,25 @@ var label lb_lt3 = na
 var label lb_ut4 = na
 var label lb_lt4 = na
 
-int ST_FLAT = 0
-int ST_LONG_T1 = 1
-int ST_LONG_T4 = 2
-int ST_SHORT_T1 = 3
-int ST_SHORT_T4 = 4
-int ST_REV_DN = 5
-int ST_REV_UP = 6
-
-var int state = 0
-var float entry_px = na
-var float stop_px = na
-var float tgt_px = na
-var int t4_touch_n = 0
-var bool near_dec = false
-var bool armed_up = false
-var bool armed_dn = false
-
 float atrv = ta.atr(i_atr_len)
 int or_a = f_add_mins(i_sess_start, i_skip_mins)
 int or_b = f_add_mins(or_a, i_or_mins)
 bool sess_new = ta.change(time("D")) != 0
 
-// Prior day HL always requested at global scope
 float pdh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 float pdl = request.security(syminfo.tickerid, "D", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 
-f_draw_level(float y, color col, string txt, line old_ln, label old_lb) =>
-    line new_ln = line.new(bar_index - 8, y, bar_index + 25, y, color=color.new(col, 20), width=2, style=line.style_dashed)
-    label new_lb = label.new(bar_index + 26, y, txt + " " + str.tostring(y, format.mintick), style=label.style_label_left, color=color.new(col, 85), textcolor=col, size=size.small)
-    if not na(old_ln)
-        line.delete(old_ln)
-    if not na(old_lb)
-        label.delete(old_lb)
+f_clear_level(line ln, label lb) =>
+    if not na(ln)
+        line.delete(ln)
+    if not na(lb)
+        label.delete(lb)
+
+f_set_level(float y, color col, string name, int x1, line old_ln, label old_lb) =>
+    f_clear_level(old_ln, old_lb)
+    int x2 = i_extend_right ? bar_index + 40 : bar_index
+    line new_ln = line.new(x1, y, x2, y, color=col, width=i_line_w, style=line.style_solid, extend=i_extend_right ? extend.right : extend.none)
+    label new_lb = label.new(x2, y, name + " " + str.tostring(y, format.mintick), style=label.style_label_left, color=color.new(col, 80), textcolor=col, size=size.normal)
     [new_ln, new_lb]
 
 bool levels_ready = false
@@ -168,17 +122,42 @@ if sess_new
     or_h := na
     or_l := na
     or_done := false
-    if not i_show_hist and not na(or_box)
+    freeze_bar := na
+    H := na
+    L := na
+    if not na(or_box)
         box.delete(or_box)
         or_box := na
-    state := ST_FLAT
-    entry_px := na
-    stop_px := na
-    tgt_px := na
-    t4_touch_n := 0
-    near_dec := false
-    armed_up := false
-    armed_dn := false
+    f_clear_level(ln_ud, lb_ud)
+    f_clear_level(ln_ld, lb_ld)
+    f_clear_level(ln_ut1, lb_ut1)
+    f_clear_level(ln_lt1, lb_lt1)
+    f_clear_level(ln_ut2, lb_ut2)
+    f_clear_level(ln_lt2, lb_lt2)
+    f_clear_level(ln_ut3, lb_ut3)
+    f_clear_level(ln_lt3, lb_lt3)
+    f_clear_level(ln_ut4, lb_ut4)
+    f_clear_level(ln_lt4, lb_lt4)
+    ln_ud := na
+    ln_ld := na
+    ln_ut1 := na
+    ln_lt1 := na
+    ln_ut2 := na
+    ln_lt2 := na
+    ln_ut3 := na
+    ln_lt3 := na
+    ln_ut4 := na
+    ln_lt4 := na
+    lb_ud := na
+    lb_ld := na
+    lb_ut1 := na
+    lb_lt1 := na
+    lb_ut2 := na
+    lb_lt2 := na
+    lb_ut3 := na
+    lb_lt3 := na
+    lb_ut4 := na
+    lb_lt4 := na
 
 if i_mode == "INTRADAY"
     bool in_or = f_in_win(time, or_a, or_b)
@@ -201,10 +180,12 @@ if i_mode == "INTRADAY"
         H := useH
         L := useL
         or_done := true
+        freeze_bar := bar_index
         just_freeze := true
-        if not na(or_box)
-            box.delete(or_box)
-        or_box := box.new(bar_index - 20, useH, bar_index, useL, border_color=color.new(c_dec, 60), bgcolor=color.new(c_dec, 92), border_width=1)
+        if i_show_or_box
+            if not na(or_box)
+                box.delete(or_box)
+            or_box := box.new(bar_index - 20, useH, bar_index, useL, border_color=color.new(c_dec, 50), bgcolor=color.new(c_dec, 90), border_width=1)
     if or_done and not na(H) and not na(L)
         levels_ready := true
 else
@@ -220,8 +201,9 @@ else
         useL := mid - floorB
     H := useH
     L := useL
+    if na(freeze_bar)
+        freeze_bar := math.max(bar_index - i_lookback, 0)
     levels_ready := not na(H) and not na(L) and H > L
-    just_freeze := barstate.islast
 
 if levels_ready
     C := (H + L) * 0.5
@@ -237,286 +219,118 @@ if levels_ready
     UT4 := C + i_t4_r * B
     LT4 := C - i_t4_r * B
 
-if levels_ready and (i_mode == "PREDICTION" or just_freeze or barstate.islast)
-    [n0, m0] = f_draw_level(UD, c_dec, "UD", ln_ud, lb_ud)
-    ln_ud := n0
-    lb_ud := m0
-    [n1, m1] = f_draw_level(LD, c_dec, "LD", ln_ld, lb_ld)
-    ln_ld := n1
-    lb_ld := m1
-    [n2, m2] = f_draw_level(UT1, c_t1, "UT1", ln_ut1, lb_ut1)
-    ln_ut1 := n2
-    lb_ut1 := m2
-    [n3, m3] = f_draw_level(LT1, c_t1, "LT1", ln_lt1, lb_lt1)
-    ln_lt1 := n3
-    lb_lt1 := m3
-    [n4, m4] = f_draw_level(UT2, c_t2, "UT2", ln_ut2, lb_ut2)
-    ln_ut2 := n4
-    lb_ut2 := m4
-    [n5, m5] = f_draw_level(LT2, c_t2, "LT2", ln_lt2, lb_lt2)
-    ln_lt2 := n5
-    lb_lt2 := m5
-    [n6, m6] = f_draw_level(UT3, c_t3, "UT3", ln_ut3, lb_ut3)
-    ln_ut3 := n6
-    lb_ut3 := m6
-    [n7, m7] = f_draw_level(LT3, c_t3, "LT3", ln_lt3, lb_lt3)
-    ln_lt3 := n7
-    lb_lt3 := m7
-    [n8, m8] = f_draw_level(UT4, c_t4, "UT4", ln_ut4, lb_ut4)
-    ln_ut4 := n8
-    lb_ut4 := m8
-    [n9, m9] = f_draw_level(LT4, c_t4, "LT4", ln_lt4, lb_lt4)
-    ln_lt4 := n9
-    lb_lt4 := m9
+int x_start = nz(freeze_bar, bar_index)
 
-bool sig_buy_t1 = false
-bool sig_ext_up = false
-bool sig_rev_dn = false
-bool sig_dn_t1 = false
-bool sig_ext_dn = false
-bool sig_rev_up = false
-bool sig_stop = false
-bool sig_tgt = false
+// Draw once when frozen; keep extending through the day. PREDICTION redraws as window moves.
+bool need_draw = levels_ready and (just_freeze or (i_mode == "PREDICTION" and barstate.islast) or (i_mode == "INTRADAY" and or_done and na(ln_ud)))
 
-if levels_ready and not na(B) and B > 0
-    float dec_mid = (UD + LD) * 0.5
-    float zone = i_dec_zone * B
-    float t4tol = i_t4_touch_tol * B
+if need_draw
+    [a0, b0] = f_set_level(UD, c_dec, "Decider High", x_start, ln_ud, lb_ud)
+    ln_ud := a0
+    lb_ud := b0
+    [a1, b1] = f_set_level(LD, c_dec, "Decider Low", x_start, ln_ld, lb_ld)
+    ln_ld := a1
+    lb_ld := b1
+    [a2, b2] = f_set_level(UT1, c_t1, "Target 1 High", x_start, ln_ut1, lb_ut1)
+    ln_ut1 := a2
+    lb_ut1 := b2
+    [a3, b3] = f_set_level(LT1, c_t1, "Target 1 Low", x_start, ln_lt1, lb_lt1)
+    ln_lt1 := a3
+    lb_lt1 := b3
+    [a4, b4] = f_set_level(UT2, c_t2, "Target 2 High", x_start, ln_ut2, lb_ut2)
+    ln_ut2 := a4
+    lb_ut2 := b4
+    [a5, b5] = f_set_level(LT2, c_t2, "Target 2 Low", x_start, ln_lt2, lb_lt2)
+    ln_lt2 := a5
+    lb_lt2 := b5
+    [a6, b6] = f_set_level(UT3, c_t3, "Target 3 High", x_start, ln_ut3, lb_ut3)
+    ln_ut3 := a6
+    lb_ut3 := b6
+    [a7, b7] = f_set_level(LT3, c_t3, "Target 3 Low", x_start, ln_lt3, lb_lt3)
+    ln_lt3 := a7
+    lb_lt3 := b7
+    [a8, b8] = f_set_level(UT4, c_t4, "Target 4 High", x_start, ln_ut4, lb_ut4)
+    ln_ut4 := a8
+    lb_ut4 := b8
+    [a9, b9] = f_set_level(LT4, c_t4, "Target 4 Low", x_start, ln_lt4, lb_lt4)
+    ln_lt4 := a9
+    lb_lt4 := b9
 
-    if math.abs(close - dec_mid) <= zone or low <= UD and high >= LD
-        near_dec := true
-        armed_up := true
-        armed_dn := true
+// Keep labels readable at the right edge through the session
+if levels_ready and i_mode == "INTRADAY" and or_done and barstate.islast
+    if not na(ln_ud)
+        line.set_x2(ln_ud, bar_index + 40)
+        label.set_xy(lb_ud, bar_index + 41, UD)
+        label.set_text(lb_ud, "Decider High " + str.tostring(UD, format.mintick))
+    if not na(ln_ld)
+        line.set_x2(ln_ld, bar_index + 40)
+        label.set_xy(lb_ld, bar_index + 41, LD)
+        label.set_text(lb_ld, "Decider Low " + str.tostring(LD, format.mintick))
+    if not na(ln_ut1)
+        line.set_x2(ln_ut1, bar_index + 40)
+        label.set_xy(lb_ut1, bar_index + 41, UT1)
+        label.set_text(lb_ut1, "Target 1 High " + str.tostring(UT1, format.mintick))
+    if not na(ln_lt1)
+        line.set_x2(ln_lt1, bar_index + 40)
+        label.set_xy(lb_lt1, bar_index + 41, LT1)
+        label.set_text(lb_lt1, "Target 1 Low " + str.tostring(LT1, format.mintick))
+    if not na(ln_ut2)
+        line.set_x2(ln_ut2, bar_index + 40)
+        label.set_xy(lb_ut2, bar_index + 41, UT2)
+        label.set_text(lb_ut2, "Target 2 High " + str.tostring(UT2, format.mintick))
+    if not na(ln_lt2)
+        line.set_x2(ln_lt2, bar_index + 40)
+        label.set_xy(lb_lt2, bar_index + 41, LT2)
+        label.set_text(lb_lt2, "Target 2 Low " + str.tostring(LT2, format.mintick))
+    if not na(ln_ut3)
+        line.set_x2(ln_ut3, bar_index + 40)
+        label.set_xy(lb_ut3, bar_index + 41, UT3)
+        label.set_text(lb_ut3, "Target 3 High " + str.tostring(UT3, format.mintick))
+    if not na(ln_lt3)
+        line.set_x2(ln_lt3, bar_index + 40)
+        label.set_xy(lb_lt3, bar_index + 41, LT3)
+        label.set_text(lb_lt3, "Target 3 Low " + str.tostring(LT3, format.mintick))
+    if not na(ln_ut4)
+        line.set_x2(ln_ut4, bar_index + 40)
+        label.set_xy(lb_ut4, bar_index + 41, UT4)
+        label.set_text(lb_ut4, "Target 4 High " + str.tostring(UT4, format.mintick))
+    if not na(ln_lt4)
+        line.set_x2(ln_lt4, bar_index + 40)
+        label.set_xy(lb_lt4, bar_index + 41, LT4)
+        label.set_text(lb_lt4, "Target 4 Low " + str.tostring(LT4, format.mintick))
 
-    int st0 = state
-
-    if st0 == ST_LONG_T1 or st0 == ST_LONG_T4
-        if low <= stop_px
-            sig_stop := true
-            state := ST_FLAT
-            entry_px := na
-            stop_px := na
-            tgt_px := na
-            armed_up := false
-        else if st0 == ST_LONG_T1
-            if close > UT1
-                sig_ext_up := true
-                state := ST_LONG_T4
-                tgt_px := UT4
-                if i_trail_dec
-                    stop_px := f_stop_long(LD, B, atrv)
-                t4_touch_n := 0
-            else if high >= UT1
-                sig_tgt := true
-                state := ST_FLAT
-                entry_px := na
-                stop_px := na
-                tgt_px := na
-                armed_up := false
-                near_dec := false
-        else if st0 == ST_LONG_T4
-            if high >= UT4 and close > UT4
-                sig_tgt := true
-                state := ST_FLAT
-                entry_px := na
-                stop_px := na
-                tgt_px := na
-                armed_up := false
-                near_dec := false
-                t4_touch_n := 0
-            else
-                bool touch_ut4 = high >= UT4 - t4tol
-                bool broke_ut4 = close > UT4
-                if broke_ut4
-                    t4_touch_n := 0
-                else if touch_ut4
-                    t4_touch_n := t4_touch_n + 1
-                    if t4_touch_n >= i_t4_fail_bars
-                        sig_rev_dn := true
-                        state := ST_REV_DN
-                        entry_px := close
-                        stop_px := f_stop_short(UT4, B, atrv)
-                        tgt_px := math.max(LT1, LD)
-                        t4_touch_n := 0
-                        armed_dn := false
-
-    else if st0 == ST_SHORT_T1 or st0 == ST_SHORT_T4
-        if high >= stop_px
-            sig_stop := true
-            state := ST_FLAT
-            entry_px := na
-            stop_px := na
-            tgt_px := na
-            armed_dn := false
-        else if st0 == ST_SHORT_T1
-            if close < LT1
-                sig_ext_dn := true
-                state := ST_SHORT_T4
-                tgt_px := LT4
-                if i_trail_dec
-                    stop_px := f_stop_short(UD, B, atrv)
-                t4_touch_n := 0
-            else if low <= LT1
-                sig_tgt := true
-                state := ST_FLAT
-                entry_px := na
-                stop_px := na
-                tgt_px := na
-                armed_dn := false
-                near_dec := false
-        else if st0 == ST_SHORT_T4
-            if low <= LT4 and close < LT4
-                sig_tgt := true
-                state := ST_FLAT
-                entry_px := na
-                stop_px := na
-                tgt_px := na
-                armed_dn := false
-                near_dec := false
-                t4_touch_n := 0
-            else
-                bool touch_lt4 = low <= LT4 + t4tol
-                bool broke_lt4 = close < LT4
-                if broke_lt4
-                    t4_touch_n := 0
-                else if touch_lt4
-                    t4_touch_n := t4_touch_n + 1
-                    if t4_touch_n >= i_t4_fail_bars
-                        sig_rev_up := true
-                        state := ST_REV_UP
-                        entry_px := close
-                        stop_px := f_stop_long(LT4, B, atrv)
-                        tgt_px := math.min(UT1, UD)
-                        t4_touch_n := 0
-                        armed_up := false
-
-    else if st0 == ST_REV_DN
-        if high >= stop_px
-            sig_stop := true
-            state := ST_FLAT
-            entry_px := na
-            stop_px := na
-            tgt_px := na
-        else if low <= tgt_px or close <= dec_mid
-            sig_tgt := true
-            state := ST_FLAT
-            entry_px := na
-            stop_px := na
-            tgt_px := na
-            near_dec := false
-
-    else if st0 == ST_REV_UP
-        if low <= stop_px
-            sig_stop := true
-            state := ST_FLAT
-            entry_px := na
-            stop_px := na
-            tgt_px := na
-        else if high >= tgt_px or close >= dec_mid
-            sig_tgt := true
-            state := ST_FLAT
-            entry_px := na
-            stop_px := na
-            tgt_px := na
-            near_dec := false
-
-    if state == ST_FLAT and st0 == ST_FLAT
-        bool up_from_dec = close > UD and close < UT1 and close > open
-        bool dn_from_dec = close < LD and close > LT1 and close < open
-        if armed_up and up_from_dec
-            sig_buy_t1 := true
-            state := ST_LONG_T1
-            entry_px := close
-            stop_px := f_stop_long(LD, B, atrv)
-            tgt_px := UT1
-            armed_up := false
-            t4_touch_n := 0
-        else if armed_dn and dn_from_dec
-            sig_dn_t1 := true
-            state := ST_SHORT_T1
-            entry_px := close
-            stop_px := f_stop_short(UD, B, atrv)
-            tgt_px := LT1
-            armed_dn := false
-            t4_touch_n := 0
-
-plotshape(sig_buy_t1, title="BUY T1", style=shape.labelup, location=location.belowbar, color=c_buy, text="BUY T1", textcolor=color.white, size=size.small)
-plotshape(sig_ext_up, title="EXTEND T4", style=shape.triangleup, location=location.belowbar, color=c_t4, size=size.small)
-plotshape(sig_rev_dn, title="REV DN", style=shape.labeldown, location=location.abovebar, color=c_rev, text="REV DN", textcolor=color.black, size=size.small)
-plotshape(sig_dn_t1, title="DN T1", style=shape.labeldown, location=location.abovebar, color=c_sell, text="DN T1", textcolor=color.white, size=size.small)
-plotshape(sig_ext_dn, title="EXTEND LT4", style=shape.triangledown, location=location.abovebar, color=c_t4, size=size.small)
-plotshape(sig_rev_up, title="REV UP", style=shape.labelup, location=location.belowbar, color=c_rev, text="REV UP", textcolor=color.black, size=size.small)
-plotshape(sig_stop, title="STOP", style=shape.xcross, location=location.absolute, color=color.red, size=size.tiny)
-plotshape(sig_tgt, title="TARGET", style=shape.diamond, location=location.absolute, color=color.lime, size=size.tiny)
-
-plot(i_show_stop and not na(stop_px) ? stop_px : na, "Active Stop", color=color.new(color.red, 30), style=plot.style_linebr, linewidth=1)
-
-string state_txt = "FLAT"
-if state == ST_LONG_T1
-    state_txt := "LONG to T1"
-if state == ST_LONG_T4
-    state_txt := "LONG to T4"
-if state == ST_SHORT_T1
-    state_txt := "SHORT to T1"
-if state == ST_SHORT_T4
-    state_txt := "SHORT to T4"
-if state == ST_REV_DN
-    state_txt := "REV DN to T1 Dec"
-if state == ST_REV_UP
-    state_txt := "REV UP to T1 Dec"
-
-string armed_txt = "-"
-if armed_up and armed_dn
-    armed_txt := "UP DN"
-else if armed_up
-    armed_txt := "UP"
-else if armed_dn
-    armed_txt := "DN"
-
-string entry_txt = "-"
-if not na(entry_px)
-    entry_txt := str.tostring(entry_px, format.mintick)
-string stop_txt = "-"
-if not na(stop_px)
-    stop_txt := str.tostring(stop_px, format.mintick)
-string tgt_txt = "-"
-if not na(tgt_px)
-    tgt_txt := str.tostring(tgt_px, format.mintick)
+// Also plot as series so levels stay visible as classic S/R across the day
+plot(levels_ready ? UD : na, "Decider High", color=c_dec, linewidth=2, style=plot.style_linebr)
+plot(levels_ready ? LD : na, "Decider Low", color=c_dec, linewidth=2, style=plot.style_linebr)
+plot(levels_ready ? UT1 : na, "Target 1 High", color=c_t1, linewidth=2, style=plot.style_linebr)
+plot(levels_ready ? LT1 : na, "Target 1 Low", color=c_t1, linewidth=2, style=plot.style_linebr)
+plot(levels_ready ? UT2 : na, "Target 2 High", color=c_t2, linewidth=1, style=plot.style_linebr)
+plot(levels_ready ? LT2 : na, "Target 2 Low", color=c_t2, linewidth=1, style=plot.style_linebr)
+plot(levels_ready ? UT3 : na, "Target 3 High", color=c_t3, linewidth=1, style=plot.style_linebr)
+plot(levels_ready ? LT3 : na, "Target 3 Low", color=c_t3, linewidth=1, style=plot.style_linebr)
+plot(levels_ready ? UT4 : na, "Target 4 High", color=c_t4, linewidth=2, style=plot.style_linebr)
+plot(levels_ready ? LT4 : na, "Target 4 Low", color=c_t4, linewidth=2, style=plot.style_linebr)
 
 if i_show_table and barstate.islast and levels_ready
-    var table tb = table.new(position.top_right, 2, 13, bgcolor=color.new(#1a1a2e, 15), border_width=1, border_color=color.new(#888888, 50))
+    var table tb = table.new(position.top_right, 2, 9, bgcolor=color.new(#1a1a2e, 15), border_width=1, border_color=color.new(#888888, 50))
     table.cell(tb, 0, 0, "Mode", text_color=color.gray, text_size=size.small)
     table.cell(tb, 1, 0, i_mode, text_color=color.white, text_size=size.small)
-    table.cell(tb, 0, 1, "State", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 1, state_txt, text_color=c_dec, text_size=size.small)
-    table.cell(tb, 0, 2, "H / L", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 2, str.tostring(H, format.mintick) + " / " + str.tostring(L, format.mintick), text_color=color.white, text_size=size.small)
-    table.cell(tb, 0, 3, "C / B", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 3, str.tostring(C, format.mintick) + " / " + str.tostring(B, format.mintick), text_color=color.white, text_size=size.small)
-    table.cell(tb, 0, 4, "Decider", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 4, str.tostring(UD, format.mintick) + " / " + str.tostring(LD, format.mintick), text_color=c_dec, text_size=size.small)
-    table.cell(tb, 0, 5, "T1", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 5, str.tostring(UT1, format.mintick) + " / " + str.tostring(LT1, format.mintick), text_color=c_t1, text_size=size.small)
-    table.cell(tb, 0, 6, "T2", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 6, str.tostring(UT2, format.mintick) + " / " + str.tostring(LT2, format.mintick), text_color=c_t2, text_size=size.small)
-    table.cell(tb, 0, 7, "T3", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 7, str.tostring(UT3, format.mintick) + " / " + str.tostring(LT3, format.mintick), text_color=c_t3, text_size=size.small)
-    table.cell(tb, 0, 8, "T4", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 8, str.tostring(UT4, format.mintick) + " / " + str.tostring(LT4, format.mintick), text_color=c_t4, text_size=size.small)
-    table.cell(tb, 0, 9, "Entry", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 9, entry_txt, text_color=color.white, text_size=size.small)
-    table.cell(tb, 0, 10, "Stop", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 10, stop_txt, text_color=color.red, text_size=size.small)
-    table.cell(tb, 0, 11, "Target", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 11, tgt_txt, text_color=color.lime, text_size=size.small)
-    table.cell(tb, 0, 12, "Armed", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 12, armed_txt, text_color=color.white, text_size=size.small)
-
-alertcondition(sig_buy_t1, title="BUY Target 1", message="Decider to T1 upside entry")
-alertcondition(sig_ext_up, title="Extend to T4", message="T1 broken expect Target 4")
-alertcondition(sig_rev_dn, title="Reversal Down", message="T4 failed reverse to T1 Decider")
-alertcondition(sig_dn_t1, title="DN Target 1", message="Decider to T1 downside entry")
-alertcondition(sig_ext_dn, title="Extend to LT4", message="LT1 broken expect Target 4 down")
-alertcondition(sig_rev_up, title="Reversal Up", message="LT4 failed reverse to T1 Decider")
-alertcondition(sig_stop, title="Stop Hit", message="Stop loss hit")
-alertcondition(sig_tgt, title="Target Hit", message="Target reached")
+    table.cell(tb, 0, 1, "H / L", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 1, str.tostring(H, format.mintick) + " / " + str.tostring(L, format.mintick), text_color=color.white, text_size=size.small)
+    table.cell(tb, 0, 2, "C / B", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 2, str.tostring(C, format.mintick) + " / " + str.tostring(B, format.mintick), text_color=color.white, text_size=size.small)
+    table.cell(tb, 0, 3, "Decider", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 3, str.tostring(UD, format.mintick) + " / " + str.tostring(LD, format.mintick), text_color=c_dec, text_size=size.small)
+    table.cell(tb, 0, 4, "Target 1", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 4, str.tostring(UT1, format.mintick) + " / " + str.tostring(LT1, format.mintick), text_color=c_t1, text_size=size.small)
+    table.cell(tb, 0, 5, "Target 2", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 5, str.tostring(UT2, format.mintick) + " / " + str.tostring(LT2, format.mintick), text_color=c_t2, text_size=size.small)
+    table.cell(tb, 0, 6, "Target 3", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 6, str.tostring(UT3, format.mintick) + " / " + str.tostring(LT3, format.mintick), text_color=c_t3, text_size=size.small)
+    table.cell(tb, 0, 7, "Target 4", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 7, str.tostring(UT4, format.mintick) + " / " + str.tostring(LT4, format.mintick), text_color=c_t4, text_size=size.small)
+    table.cell(tb, 0, 8, "Status", text_color=color.gray, text_size=size.small)
+    string status_txt = "LIVE"
+    if i_mode == "INTRADAY"
+        status_txt := or_done ? "FROZEN" : "Building OR"
+    table.cell(tb, 1, 8, status_txt, text_color=color.aqua, text_size=size.small)
