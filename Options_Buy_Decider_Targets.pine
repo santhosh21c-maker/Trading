@@ -1,18 +1,20 @@
 //@version=5
-indicator("Options Buy Decider Targets", overlay=true, max_labels_count=50)
+indicator("Options Buy Decider Targets", overlay=true, max_lines_count=50, max_labels_count=50)
 
 // Decider + Targets as S/R on any option strike chart
 // C = mid, B = half range
 // Decider = C +/- 0.06*B
 // Targets = C +/- 1.00, 1.54, 1.83, 2.08 * B
 
+tz = "Asia/Kolkata"
+
 i_intraday = input.bool(true, "INTRADAY mode")
 i_sess_start = input.int(915, "Session start HHMM", minval=0, maxval=2359)
 i_skip_mins = input.int(5, "Skip first N minutes", minval=0, maxval=120)
 i_or_mins = input.int(30, "OR length minutes", minval=5, maxval=180)
-i_use_pd = input.bool(true, "Widen with prior day HL")
+i_use_pd = input.bool(false, "Widen with prior day HL")
 i_lookback = input.int(50, "Prediction lookback bars", minval=10, maxval=500)
-i_atr_mult = input.float(0.35, "Min B ATR mult", minval=0.0, step=0.05)
+i_atr_mult = input.float(0.0, "Min B ATR mult", minval=0.0, step=0.05)
 i_atr_len = input.int(14, "ATR length", minval=1)
 i_dec_r = input.float(0.06, "Decider ratio", step=0.01)
 i_t1_r = input.float(1.00, "Target 1 ratio", step=0.01)
@@ -24,6 +26,7 @@ c_t1 = input.color(color.rgb(76, 175, 80), "Target 1 color")
 c_t2 = input.color(color.rgb(33, 150, 243), "Target 2 color")
 c_t3 = input.color(color.rgb(156, 39, 176), "Target 3 color")
 c_t4 = input.color(color.rgb(233, 30, 99), "Target 4 color")
+i_line_w = input.int(2, "Line width", minval=1, maxval=4)
 i_show_table = input.bool(true, "Show info table")
 i_show_labels = input.bool(true, "Show level labels")
 
@@ -38,15 +41,44 @@ f_add_mins(hhmm, add) =>
     m = int(total - h * 60)
     h * 100 + m
 
+f_hm(t) =>
+    hour(t, tz) * 100 + minute(t, tz)
+
 f_in_win(t, a, b) =>
-    hm = hour(t) * 100 + minute(t)
+    hm = f_hm(t)
     hm >= a and hm < b
+
+f_del_line(ln) =>
+    if not na(ln)
+        line.delete(ln)
+
+f_del_label(lb) =>
+    if not na(lb)
+        label.delete(lb)
+
+f_mk_line(y, col, x1) =>
+    line.new(x1, y, bar_index, y, xloc=xloc.bar_index, extend=extend.right, color=col, width=i_line_w, style=line.style_solid)
+
+f_mk_label(y, txt, col) =>
+    label.new(bar_index, y, txt, xloc=xloc.bar_index, style=label.style_label_left, color=color.new(col, 85), textcolor=col, size=size.normal)
 
 var float or_h = na
 var float or_l = na
 var bool or_done = false
+var int freeze_x = na
 var float H = na
 var float L = na
+
+var line ln_ud = na
+var line ln_ld = na
+var line ln_ut1 = na
+var line ln_lt1 = na
+var line ln_ut2 = na
+var line ln_lt2 = na
+var line ln_ut3 = na
+var line ln_lt3 = na
+var line ln_ut4 = na
+var line ln_lt4 = na
 var label lb_ud = na
 var label lb_ld = na
 var label lb_ut1 = na
@@ -61,42 +93,99 @@ var label lb_lt4 = na
 atrv = ta.atr(i_atr_len)
 or_a = f_add_mins(i_sess_start, i_skip_mins)
 or_b = f_add_mins(or_a, i_or_mins)
-sess_new = ta.change(time("D")) != 0
+sess_new = ta.change(time("D", tz)) != 0
 pdh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 pdl = request.security(syminfo.tickerid, "D", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+clear_drawings() =>
+    f_del_line(ln_ud)
+    f_del_line(ln_ld)
+    f_del_line(ln_ut1)
+    f_del_line(ln_lt1)
+    f_del_line(ln_ut2)
+    f_del_line(ln_lt2)
+    f_del_line(ln_ut3)
+    f_del_line(ln_lt3)
+    f_del_line(ln_ut4)
+    f_del_line(ln_lt4)
+    f_del_label(lb_ud)
+    f_del_label(lb_ld)
+    f_del_label(lb_ut1)
+    f_del_label(lb_lt1)
+    f_del_label(lb_ut2)
+    f_del_label(lb_lt2)
+    f_del_label(lb_ut3)
+    f_del_label(lb_lt3)
+    f_del_label(lb_ut4)
+    f_del_label(lb_lt4)
+    true
 
 if sess_new
     or_h := na
     or_l := na
     or_done := false
+    freeze_x := na
     H := na
     L := na
+    clear_drawings()
+    ln_ud := na
+    ln_ld := na
+    ln_ut1 := na
+    ln_lt1 := na
+    ln_ut2 := na
+    ln_lt2 := na
+    ln_ut3 := na
+    ln_lt3 := na
+    ln_ut4 := na
+    ln_lt4 := na
+    lb_ud := na
+    lb_ld := na
+    lb_ut1 := na
+    lb_lt1 := na
+    lb_ut2 := na
+    lb_lt2 := na
+    lb_ut3 := na
+    lb_lt3 := na
+    lb_ut4 := na
+    lb_lt4 := na
 
 levels_ready = false
+just_froze = false
 
 if i_intraday
     in_or = f_in_win(time, or_a, or_b)
-    if in_or and not or_done
+    // Collect OR high/low during window; also collect after open if window was missed
+    after_open = f_hhmm_to_min(f_hm(time)) >= f_hhmm_to_min(i_sess_start)
+    if not or_done and after_open and in_or
         or_h := na(or_h) ? high : math.max(or_h, high)
         or_l := na(or_l) ? low : math.min(or_l, low)
-    now_hm = hour * 100 + minute
-    past_or = not or_done and not na(or_h) and not na(or_l) and not in_or and f_hhmm_to_min(now_hm) >= f_hhmm_to_min(or_b)
+    now_hm = f_hm(time)
+    past_or = not or_done and f_hhmm_to_min(now_hm) >= f_hhmm_to_min(or_b)
     if past_or
         useH = or_h
         useL = or_l
+        // If OR window had no bars, seed from current bar so levels still appear
+        if na(useH) or na(useL)
+            useH := high
+            useL := low
         if i_use_pd and not na(pdh) and not na(pdl)
             useH := math.max(useH, pdh)
             useL := math.min(useL, pdl)
+        if useH == useL
+            useH := useH + syminfo.mintick
+            useL := useL - syminfo.mintick
         half = (useH - useL) * 0.5
         floorB = i_atr_mult * atrv
-        if not na(floorB) and floorB > 0 and half < floorB
+        if i_atr_mult > 0 and not na(floorB) and floorB > 0 and half < floorB
             mid = (useH + useL) * 0.5
             useH := mid + floorB
             useL := mid - floorB
         H := useH
         L := useL
         or_done := true
-    levels_ready := or_done and not na(H) and not na(L)
+        freeze_x := bar_index
+        just_froze := true
+    levels_ready := or_done and not na(H) and not na(L) and H > L
 else
     hh = ta.highest(high, i_lookback)
     ll = ta.lowest(low, i_lookback)
@@ -104,13 +193,15 @@ else
     floorB = i_atr_mult * atrv
     useH = hh
     useL = ll
-    if not na(floorB) and floorB > 0 and half < floorB
+    if i_atr_mult > 0 and not na(floorB) and floorB > 0 and half < floorB
         mid = (hh + ll) * 0.5
         useH := mid + floorB
         useL := mid - floorB
     H := useH
     L := useL
+    freeze_x := math.max(bar_index - i_lookback, 0)
     levels_ready := not na(H) and not na(L) and H > L
+    just_froze := barstate.islast
 
 C = float(na)
 B = float(na)
@@ -139,68 +230,90 @@ if levels_ready
     UT4 := C + i_t4_r * B
     LT4 := C - i_t4_r * B
 
-plot(UD, "Decider High", color=c_dec, linewidth=2, style=plot.style_linebr)
-plot(LD, "Decider Low", color=c_dec, linewidth=2, style=plot.style_linebr)
-plot(UT1, "Target 1 High", color=c_t1, linewidth=2, style=plot.style_linebr)
-plot(LT1, "Target 1 Low", color=c_t1, linewidth=2, style=plot.style_linebr)
+// Draw solid S/R lines once when ready; PREDICTION refreshes on last bar
+need_draw = levels_ready and (just_froze or na(ln_ud) or (not i_intraday and barstate.islast))
+x1 = nz(freeze_x, bar_index)
+
+if need_draw
+    clear_drawings()
+    ln_ud := f_mk_line(UD, c_dec, x1)
+    ln_ld := f_mk_line(LD, c_dec, x1)
+    ln_ut1 := f_mk_line(UT1, c_t1, x1)
+    ln_lt1 := f_mk_line(LT1, c_t1, x1)
+    ln_ut2 := f_mk_line(UT2, c_t2, x1)
+    ln_lt2 := f_mk_line(LT2, c_t2, x1)
+    ln_ut3 := f_mk_line(UT3, c_t3, x1)
+    ln_lt3 := f_mk_line(LT3, c_t3, x1)
+    ln_ut4 := f_mk_line(UT4, c_t4, x1)
+    ln_lt4 := f_mk_line(LT4, c_t4, x1)
+    if i_show_labels
+        lb_ud := f_mk_label(UD, "Decider High " + str.tostring(UD, format.mintick), c_dec)
+        lb_ld := f_mk_label(LD, "Decider Low " + str.tostring(LD, format.mintick), c_dec)
+        lb_ut1 := f_mk_label(UT1, "Target 1 High " + str.tostring(UT1, format.mintick), c_t1)
+        lb_lt1 := f_mk_label(LT1, "Target 1 Low " + str.tostring(LT1, format.mintick), c_t1)
+        lb_ut2 := f_mk_label(UT2, "Target 2 High " + str.tostring(UT2, format.mintick), c_t2)
+        lb_lt2 := f_mk_label(LT2, "Target 2 Low " + str.tostring(LT2, format.mintick), c_t2)
+        lb_ut3 := f_mk_label(UT3, "Target 3 High " + str.tostring(UT3, format.mintick), c_t3)
+        lb_lt3 := f_mk_label(LT3, "Target 3 Low " + str.tostring(LT3, format.mintick), c_t3)
+        lb_ut4 := f_mk_label(UT4, "Target 4 High " + str.tostring(UT4, format.mintick), c_t4)
+        lb_lt4 := f_mk_label(LT4, "Target 4 Low " + str.tostring(LT4, format.mintick), c_t4)
+
+// Keep label at right edge
+if levels_ready and i_intraday and or_done and barstate.islast and i_show_labels
+    if not na(lb_ud)
+        label.set_xy(lb_ud, bar_index, UD)
+    if not na(lb_ld)
+        label.set_xy(lb_ld, bar_index, LD)
+    if not na(lb_ut1)
+        label.set_xy(lb_ut1, bar_index, UT1)
+    if not na(lb_lt1)
+        label.set_xy(lb_lt1, bar_index, LT1)
+    if not na(lb_ut2)
+        label.set_xy(lb_ut2, bar_index, UT2)
+    if not na(lb_lt2)
+        label.set_xy(lb_lt2, bar_index, LT2)
+    if not na(lb_ut3)
+        label.set_xy(lb_ut3, bar_index, UT3)
+    if not na(lb_lt3)
+        label.set_xy(lb_lt3, bar_index, LT3)
+    if not na(lb_ut4)
+        label.set_xy(lb_ut4, bar_index, UT4)
+    if not na(lb_lt4)
+        label.set_xy(lb_lt4, bar_index, LT4)
+
+// Plots as backup so levels always show on price scale
+plot(UD, "Decider High", color=c_dec, linewidth=2, style=plot.style_linebr, trackprice=true)
+plot(LD, "Decider Low", color=c_dec, linewidth=2, style=plot.style_linebr, trackprice=true)
+plot(UT1, "Target 1 High", color=c_t1, linewidth=2, style=plot.style_linebr, trackprice=true)
+plot(LT1, "Target 1 Low", color=c_t1, linewidth=2, style=plot.style_linebr, trackprice=true)
 plot(UT2, "Target 2 High", color=c_t2, linewidth=1, style=plot.style_linebr)
 plot(LT2, "Target 2 Low", color=c_t2, linewidth=1, style=plot.style_linebr)
 plot(UT3, "Target 3 High", color=c_t3, linewidth=1, style=plot.style_linebr)
 plot(LT3, "Target 3 Low", color=c_t3, linewidth=1, style=plot.style_linebr)
-plot(UT4, "Target 4 High", color=c_t4, linewidth=2, style=plot.style_linebr)
-plot(LT4, "Target 4 Low", color=c_t4, linewidth=2, style=plot.style_linebr)
+plot(UT4, "Target 4 High", color=c_t4, linewidth=2, style=plot.style_linebr, trackprice=true)
+plot(LT4, "Target 4 Low", color=c_t4, linewidth=2, style=plot.style_linebr, trackprice=true)
 
-if i_show_labels and barstate.islast and levels_ready
-    if not na(lb_ud)
-        label.delete(lb_ud)
-    if not na(lb_ld)
-        label.delete(lb_ld)
-    if not na(lb_ut1)
-        label.delete(lb_ut1)
-    if not na(lb_lt1)
-        label.delete(lb_lt1)
-    if not na(lb_ut2)
-        label.delete(lb_ut2)
-    if not na(lb_lt2)
-        label.delete(lb_lt2)
-    if not na(lb_ut3)
-        label.delete(lb_ut3)
-    if not na(lb_lt3)
-        label.delete(lb_lt3)
-    if not na(lb_ut4)
-        label.delete(lb_ut4)
-    if not na(lb_lt4)
-        label.delete(lb_lt4)
-    lb_ud := label.new(bar_index + 2, UD, "Decider High " + str.tostring(UD), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_dec, 80), textcolor=c_dec, size=size.small)
-    lb_ld := label.new(bar_index + 2, LD, "Decider Low " + str.tostring(LD), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_dec, 80), textcolor=c_dec, size=size.small)
-    lb_ut1 := label.new(bar_index + 2, UT1, "Target 1 High " + str.tostring(UT1), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t1, 80), textcolor=c_t1, size=size.small)
-    lb_lt1 := label.new(bar_index + 2, LT1, "Target 1 Low " + str.tostring(LT1), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t1, 80), textcolor=c_t1, size=size.small)
-    lb_ut2 := label.new(bar_index + 2, UT2, "Target 2 High " + str.tostring(UT2), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t2, 80), textcolor=c_t2, size=size.small)
-    lb_lt2 := label.new(bar_index + 2, LT2, "Target 2 Low " + str.tostring(LT2), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t2, 80), textcolor=c_t2, size=size.small)
-    lb_ut3 := label.new(bar_index + 2, UT3, "Target 3 High " + str.tostring(UT3), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t3, 80), textcolor=c_t3, size=size.small)
-    lb_lt3 := label.new(bar_index + 2, LT3, "Target 3 Low " + str.tostring(LT3), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t3, 80), textcolor=c_t3, size=size.small)
-    lb_ut4 := label.new(bar_index + 2, UT4, "Target 4 High " + str.tostring(UT4), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t4, 80), textcolor=c_t4, size=size.small)
-    lb_lt4 := label.new(bar_index + 2, LT4, "Target 4 Low " + str.tostring(LT4), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(c_t4, 80), textcolor=c_t4, size=size.small)
-
-if i_show_table and barstate.islast and levels_ready
-    var table tb = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 20))
+if i_show_table and barstate.islast
+    var table tb = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 20))
     mode_txt = i_intraday ? "INTRADAY" : "PREDICTION"
     st = "LIVE"
     if i_intraday
         st := or_done ? "FROZEN" : "Building OR"
     table.cell(tb, 0, 0, "Mode", text_color=color.gray, text_size=size.small)
     table.cell(tb, 1, 0, mode_txt, text_color=color.white, text_size=size.small)
-    table.cell(tb, 0, 1, "H / L", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 1, str.tostring(H) + " / " + str.tostring(L), text_color=color.white, text_size=size.small)
-    table.cell(tb, 0, 2, "Decider", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 2, str.tostring(UD) + " / " + str.tostring(LD), text_color=c_dec, text_size=size.small)
-    table.cell(tb, 0, 3, "Target 1", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 3, str.tostring(UT1) + " / " + str.tostring(LT1), text_color=c_t1, text_size=size.small)
-    table.cell(tb, 0, 4, "Target 2", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 4, str.tostring(UT2) + " / " + str.tostring(LT2), text_color=c_t2, text_size=size.small)
-    table.cell(tb, 0, 5, "Target 3", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 5, str.tostring(UT3) + " / " + str.tostring(LT3), text_color=c_t3, text_size=size.small)
-    table.cell(tb, 0, 6, "Target 4", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 6, str.tostring(UT4) + " / " + str.tostring(LT4), text_color=c_t4, text_size=size.small)
-    table.cell(tb, 0, 7, "Status", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 7, st, text_color=color.aqua, text_size=size.small)
+    table.cell(tb, 0, 1, "Status", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 1, st, text_color=color.aqua, text_size=size.small)
+    table.cell(tb, 0, 2, "H / L", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 2, levels_ready ? str.tostring(H, format.mintick) + " / " + str.tostring(L, format.mintick) : "-", text_color=color.white, text_size=size.small)
+    table.cell(tb, 0, 3, "Decider", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 3, levels_ready ? str.tostring(UD, format.mintick) + " / " + str.tostring(LD, format.mintick) : "-", text_color=c_dec, text_size=size.small)
+    table.cell(tb, 0, 4, "Target 1", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 4, levels_ready ? str.tostring(UT1, format.mintick) + " / " + str.tostring(LT1, format.mintick) : "-", text_color=c_t1, text_size=size.small)
+    table.cell(tb, 0, 5, "Target 2", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 5, levels_ready ? str.tostring(UT2, format.mintick) + " / " + str.tostring(LT2, format.mintick) : "-", text_color=c_t2, text_size=size.small)
+    table.cell(tb, 0, 6, "Target 3", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 6, levels_ready ? str.tostring(UT3, format.mintick) + " / " + str.tostring(LT3, format.mintick) : "-", text_color=c_t3, text_size=size.small)
+    table.cell(tb, 0, 7, "Target 4", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 7, levels_ready ? str.tostring(UT4, format.mintick) + " / " + str.tostring(LT4, format.mintick) : "-", text_color=c_t4, text_size=size.small)
+    table.cell(tb, 0, 8, "OR window", text_color=color.gray, text_size=size.small)
+    table.cell(tb, 1, 8, str.tostring(or_a) + "-" + str.tostring(or_b), text_color=color.white, text_size=size.small)
