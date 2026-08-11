@@ -35,7 +35,7 @@ robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval =
 robotLagManual = input.int(0, "Manual Lag (if not Auto)", minval = 0, maxval = 500, group = grpRobot)
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
-robotTrimPct = input.float(0.0, "Trim extremes %", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Drop this % of highest highs / lowest lows before min/max (helps Ext60 L 59→~62). Try 10–15 if needed.")
+robotTrimPct = input.float(10.0, "Trim extremes %", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Drop this % of highest highs / lowest lows before min/max (helps Ext60 L 59→~62). Set 0 for raw min/max.")
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
 robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
