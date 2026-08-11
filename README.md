@@ -1,15 +1,15 @@
 # Smart Robotic Logic – Decider & Targets
 
-Educational Pine recreation of the PxTrading-style **Decider / Target** ladder.
+Educational Pine recreation of PxTrading **Decider / Target** ladder.
 
-## Segment behaviour (locked)
+## Extend behaviour (locked)
 
-| Segment | What **Extend** does |
-|---------|----------------------|
-| **Robot Prediction** | Changes **Decider / Targets** (prediction lookback) **and** draws lines further right |
-| **INDIAN** | Levels **fixed for the day** (prior-day H/L). Extend **only** lengthens lines |
+| Segment | Changing **Extend** does |
+|---------|---------------------------|
+| **Robot Prediction** | Changes **Decider / Target price levels** (lookback). Does **not** lengthen lines. |
+| **INDIAN** | Levels **fixed** for the day. Extend **only** lengthens lines. |
 
-## Ladder
+## Ladder (exact on vendor numbers)
 
 ```text
 C = (H + L) / 2
@@ -18,18 +18,18 @@ Decider  = C ± 0.06·B
 Target N = C ± {1.00, 1.54, 1.83, 2.08}·B
 ```
 
-## Vendor Robot reference (PUT 24500)
+## Vendor Robot PUT 24500
 
-| Extend | Decider | H / L / C / B (approx) |
-|--------|---------|-------------------------|
+| Extend | Decider | H / L / C / B |
+|--------|---------|----------------|
 | 50 | 72.22 / 71.59 | 77.15 / 66.65 / 71.91 / 5.25 |
 | 60 | 65.97 / 65.48 | 69.75 / 61.70 / 65.73 / 4.03 |
 
-Exact H/L bar selection is still approximate; behaviour above is the priority.
+H50 > H60 ⇒ window is **not** nested last-N. Default Robot window = **Shifted [Ext, 2Ext)**.
 
-## Behaviour test
+## Test
 
-1. **Robot** + Extend 50 → note Decider  
-2. Extend **60** → Decider **must change**  
-3. Switch to **INDIAN** → note Decider  
-4. Change Extend → Decider **must stay the same**; only line length changes  
+1. Robot Ext **50** → note Decider + chip H/L  
+2. Ext **60** → Decider **must change**; line length should look the same (`extend.right`)  
+3. Indian → change Ext → Decider unchanged; lines longer/shorter  
+4. Send chip H/L/C/B/Dec for Ext 50 and 60 on PUT 24500  
