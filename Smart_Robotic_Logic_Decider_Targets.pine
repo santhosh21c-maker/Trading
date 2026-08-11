@@ -10,13 +10,12 @@
 //   ROBOT: Extend changes levels. Lines = fixed short length.
 //   INDIAN: prior-day FROZEN. Extend = line length only.
 //
-// Checked chips (OR/Last build):
-//   Ext50: or 915-1004 H79.25 L40.00 Dec60.80  ← open crash L=40 (skip open)
-//   Ext60: last 1006-1105 H73.00 L59.55 Dec66.70 ← need H~70 L~62 (was closer when high also trimmed)
+// BUG FIXED: f_add_mins used float `/` so Ext50 OR became 1004-1037 instead of 930-1005.
+//   Broken chip: or n=34 1004-1037 H71.40 L59.35 Dec65.75
+//   Ext60 OK-ish: Dec 65.20/64.55 aim 65.97 (H70.10 L59.65) — bump low trim slightly
 //
-// This build:
-//   Ext50 OR = clock window [Start+SkipOpen .. Start+Extend)  e.g. 930-1005
-//   Ext60 Last = trimHigh 10% + trimLow 20%
+// Ext50 OR = [Start+Skip .. Start+Extend) with INTEGER time math => 930-1005
+// Ext60 Last = trimHigh 10% + trimLow 25%
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
@@ -35,7 +34,7 @@ robotLagManual = input.int(0, "Manual Lag (Last mode)", minval = 0, maxval = 500
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
 robotTrimHighPct = input.float(10.0, "Trim highs % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Prior chip H73→~70 with ~10% high trim (aim H69.75).")
-robotTrimLowPct = input.float(20.0, "Trim lows % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Lift L 59→~62 toward aim L61.70.")
+robotTrimLowPct = input.float(25.0, "Trim lows % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Lift L 59→~62 toward aim L61.70. Chip L59.65 needed ~+2.")
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
 robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
@@ -78,9 +77,14 @@ f_hhmm(int idx) =>
 f_same_day(int idx, int d0, int m0, int y0) =>
     dayofmonth(time[idx], tz) == d0 and month(time[idx], tz) == m0 and year(time[idx], tz) == y0
 
+// MUST use int() on divisions — Pine `/` is float and produced OR 1004-1037 instead of 930-1005
 f_add_mins(int hhmm, int mins) =>
-    int total = (hhmm / 100) * 60 + (hhmm % 100) + mins
-    (total / 60) * 100 + (total % 60)
+    int h = int(hhmm / 100)
+    int m = hhmm % 100
+    int total = h * 60 + m + mins
+    int nh = int(total / 60)
+    int nm = total % 60
+    nh * 100 + nm
 
 f_pick_h(int idx, string src) =>
     src == "Close" ? close[idx] : src == "Body high" ? math.max(open[idx], close[idx]) : high[idx]
@@ -239,7 +243,7 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
         iFrom := fA
         iTo := tA
     else if mode == "Auto (OR if Ext<60 / Last if Ext>=60)"
-        // Clock OR: [Start+Skip, Start+Extend) — Ext50 => 930-1005
+        // Clock OR: [Start+Skip, Start+Extend) — Ext50 => 930-1005 (int math)
         branch := "or"
         usedLag := 0
         int orStart = f_add_mins(startHhmm, orSkip)
@@ -251,6 +255,9 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
         cnt := cB
         iFrom := fB
         iTo := tB
+        // Encode intended clock span into usedLag for chip: orStart*10000+orEnd is too big;
+        // keep usedLag=orStart so chip can show planned start if needed
+        usedLag := orStart
     else if mode == "Last Ext bars"
         branch := "last"
         usedLag := manualLag
