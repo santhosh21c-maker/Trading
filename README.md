@@ -1,39 +1,18 @@
-# Options Buy Decider & Targets
+# Trading — Options Pine tools
 
-Pine indicator for **NIFTY / BANKNIFTY / SENSEX** option charts (**1m & 5m**).
+## Options Scalper 1-min (`Options_Scalper_1min.pine`)
 
-Draws **Decider** and **Target 1–4** as clear support / resistance lines on the **option premium** chart for any strike you open. No buy/sell signals.
+Use on **Nifty / BankNifty / Sensex option premium** charts (1-minute).
 
-## Modes
+**Drawn on chart (minimal):**
+- Opening range high / low
+- Day open, day high, day low
+- Live trade: Entry, Stop, T1 / T2 / T3
 
-| Mode | Behaviour |
-|------|-----------|
-| **INTRADAY** | Opening Range builds after open, then **freezes** — levels stay fixed for the day. |
-| **PREDICTION** | Live rolling lookback — levels update as the window moves. |
+Swings, Fibonacci, and round numbers still feed the **signal engine** but are **not drawn**.
 
-## Ladder
+## Options Buy Decider Targets (`Options_Buy_Decider_Targets.pine`)
 
-```text
-C = (H + L) / 2
-B = max((H - L) / 2, ATR floor)
-Decider  = C +/- 0.06*B
-Target N = C +/- {1.00, 1.54, 1.83, 2.08}*B
-```
-
-## Levels on chart
-
-- Decider High / Decider Low
-- Target 1–4 High / Low
-
-Lines plot through the session with labels. Use as S/R on the strike you are viewing.
-
-## Defaults IST
-
-- Session start `09:15`, skip `5` min → OR **09:20–09:50**
-
-## Files
-
-- `Options_Buy_Decider_Targets.pine` — use this
-- `Smart_Robotic_Logic_Decider_Targets.pine` — older reference only
+Decider / Target 1–4 S/R levels for option charts.
 
 Educational only — not financial advice.
