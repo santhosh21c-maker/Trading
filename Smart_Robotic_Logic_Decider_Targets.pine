@@ -6,26 +6,31 @@
 //   Decider = C +/- 0.06*B     // gap = 0.12*B
 //   Targets = C +/- {1, 1.54, 1.83, 2.08}*B
 //
-// SEGMENTS:
-//   INDIAN  -> prior calendar-day H/L. Length ONLY extends lines (visual).
-//   ROBOT   -> Length CHANGES H/L (prediction) AND extends lines forward.
+// EXTEND:
+//   ONLY lengthens horizontal Decider/Target lines to the right.
+//   It does NOT plot a future price path / predicted candles.
+//   It does NOT change C/B for INDIAN or ROBOT (per latest vendor behaviour).
 //
-// WHY L~33 WAS WRONG:
-//   Hybrid 5m + long Length scanned back into the open crash (and prior days).
-//   L50 H~77.55 was already near vendor; only L was poisoned.
-//   Robot now always uses chart/1m bars, today-only, after Start HHMM.
+// ROBOT H/L:
+//   Independent of Extend. Uses chart TF (1m).
+//   PUT 24450: raw lastN Low matched vendor L=8.25; raw High=32.15 was wick vs vendor H≈18.15.
+//   Default H source = Body high (ignore upper wicks). L source = Low.
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpRobot = "Robot Targets"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpRobot)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpRobot)
-lengthIn = input.int(50, "Extend => Length", minval = 2, maxval = 500, group = grpRobot)
+extendLen = input.int(50, "Extend (line length bars)", minval = 2, maxval = 500, group = grpRobot, tooltip = "Horizontal line length only. Does NOT change Decider/Targets. Does NOT plot future prices.")
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpRobot)
-hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpRobot, tooltip = "INDIAN only. Robot Prediction always uses the chart timeframe (use 1m).")
-robotWindow = input.string("Last Length bars", "Robot Window", options = ["Last Length bars", "Shifted [Len, 2Len)"], group = grpRobot, tooltip = "Last Length = most recent N valid bars. Shifted = older block ending Length bars ago (non-overlapping for different Length).")
-robotStartHhmm = input.int(1000, "Robot Start HHMM (IST)", minval = 915, maxval = 1500, group = grpRobot, tooltip = "Ignore bars before this clock time. 1000=10:00 kills open L~33 spike. Try 945 / 1015 / 1030 if H/L still off.")
-robotUseBodies = input.bool(false, "Robot Use Candle Bodies", group = grpRobot, tooltip = "If on: H/L from max(open,close)/min(open,close) instead of wicks.")
+hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpRobot, tooltip = "INDIAN only.")
+
+grpRobHL = "Robot H/L (not Extend)"
+robotMode = input.string("Today after Start", "Robot Range", options = ["Today after Start", "Last N bars", "First N bars (session)", "Prior day"], group = grpRobHL, tooltip = "Extend does not feed this. Pick how H/L are taken.")
+robotLookback = input.int(50, "Robot Lookback N", minval = 2, maxval = 500, group = grpRobHL, tooltip = "Used only for Last N / First N modes.")
+robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 915, maxval = 1500, group = grpRobHL)
+robotHSource = input.string("Body high", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobHL, tooltip = "Vendor PUT H≈18.15 vs wick 32 → Body high or Close.")
+robotLSource = input.string("Low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobHL, tooltip = "Vendor PUT L=8.25 matched raw Low.")
 
 grpSnap = "Snapshot / Freeze"
 forceRecalc = input.bool(false, "Force Recalculate Now", group = grpSnap)
@@ -56,9 +61,8 @@ clrCenter = input.color(color.new(#787B86, 0), "Centre", group = grpStyle)
 lineWidth = input.int(1, "Line Width", minval = 1, maxval = 3, group = grpStyle)
 
 isIndian = segment == "INDIAN - Index, Stock & Option"
-useShifted = robotWindow == "Shifted [Len, 2Len)"
 tz = "Asia/Kolkata"
-extendRight = math.max(lengthIn, extendRightManual)
+extendRight = math.max(extendLen, extendRightManual)
 
 f_hhmm(int idx) =>
     hour(time[idx], tz) * 100 + minute(time[idx], tz)
@@ -66,13 +70,12 @@ f_hhmm(int idx) =>
 f_same_day(int idx, int d0, int m0, int y0) =>
     dayofmonth(time[idx], tz) == d0 and month(time[idx], tz) == m0 and year(time[idx], tz) == y0
 
-f_bar_h(int idx, bool bodies) =>
-    bodies ? math.max(open[idx], close[idx]) : high[idx]
+f_pick_h(int idx, string src) =>
+    src == "Close" ? close[idx] : src == "Body high" ? math.max(open[idx], close[idx]) : high[idx]
 
-f_bar_l(int idx, bool bodies) =>
-    bodies ? math.min(open[idx], close[idx]) : low[idx]
+f_pick_l(int idx, string src) =>
+    src == "Close" ? close[idx] : src == "Body low" ? math.min(open[idx], close[idx]) : low[idx]
 
-// INDIAN: full prior calendar day H/L (Length does not affect C/B)
 f_prior_day_hl() =>
     int d0 = dayofmonth(time, tz)
     int m0 = month(time, tz)
@@ -104,11 +107,45 @@ f_prior_day_hl() =>
                 break
     [h, l]
 
+// Prior day with selectable H/L sources (for Robot prior-day mode)
+f_prior_day_hl_src(string hSrc, string lSrc) =>
+    int d0 = dayofmonth(time, tz)
+    int m0 = month(time, tz)
+    int y0 = year(time, tz)
+    float h = na
+    float l = na
+    int maxScan = math.min(bar_index, 5000)
+    bool inPrior = false
+    int priorD = na
+    int priorM = na
+    int priorY = na
+    int cnt = 0
+    for i = 1 to maxScan
+        int di = dayofmonth(time[i], tz)
+        int mi = month(time[i], tz)
+        int yi = year(time[i], tz)
+        bool sameAsToday = di == d0 and mi == m0 and yi == y0
+        if not sameAsToday
+            if not inPrior
+                inPrior := true
+                priorD := di
+                priorM := mi
+                priorY := yi
+                h := f_pick_h(i, hSrc)
+                l := f_pick_l(i, lSrc)
+                cnt := 1
+            else if di == priorD and mi == priorM and yi == priorY
+                h := math.max(h, f_pick_h(i, hSrc))
+                l := math.min(l, f_pick_l(i, lSrc))
+                cnt += 1
+            else
+                break
+    [h, l, cnt]
+
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
 
-// ROBOT: chart TF only (1m). Today + after Start HHMM. Length selects the bar set.
-f_robot_hl(int len, int startHhmm, bool shifted, bool bodies) =>
+f_robot_hl(string mode, int len, int startHhmm, string hSrc, string lSrc) =>
     float h = na
     float l = na
     int cnt = 0
@@ -117,56 +154,59 @@ f_robot_hl(int len, int startHhmm, bool shifted, bool bodies) =>
     int y0 = year(time, tz)
     int maxScan = math.min(bar_index, 5000)
 
-    if shifted
-        // Older non-overlapping block: indices [len, 2*len)
-        int iFrom = len
-        int iTo = math.min(2 * len - 1, bar_index)
-        if iFrom <= iTo
-            for i = iFrom to iTo
-                if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                    float bh = f_bar_h(i, bodies)
-                    float bl = f_bar_l(i, bodies)
+    if mode == "Prior day"
+        [hp, lp, cp] = f_prior_day_hl_src(hSrc, lSrc)
+        h := hp
+        l := lp
+        cnt := cp
+    else if mode == "First N bars (session)"
+        int dayBars = 0
+        for i = 1 to maxScan
+            if f_same_day(i, d0, m0, y0)
+                dayBars += 1
+            else
+                break
+        if dayBars > 0
+            for i = dayBars to 1
+                if f_hhmm(i) >= startHhmm
+                    float bh = f_pick_h(i, hSrc)
+                    float bl = f_pick_l(i, lSrc)
                     h := na(h) ? bh : math.max(h, bh)
                     l := na(l) ? bl : math.min(l, bl)
                     cnt += 1
-        // If block too thin after time filter, walk forward toward now (still after start)
-        if cnt < math.max(5, int(len * 0.25))
-            h := na
-            l := na
-            cnt := 0
-            for i = 1 to maxScan
-                if cnt >= len
-                    break
-                if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                    float bh = f_bar_h(i, bodies)
-                    float bl = f_bar_l(i, bodies)
-                    h := na(h) ? bh : math.max(h, bh)
-                    l := na(l) ? bl : math.min(l, bl)
-                    cnt += 1
-                else if not f_same_day(i, d0, m0, y0)
-                    break
-    else
-        // Last `len` valid bars (most recent), today, after start — excludes open L~33
+                    if cnt >= len
+                        break
+    else if mode == "Last N bars"
         for i = 1 to maxScan
             if cnt >= len
                 break
             if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                float bh = f_bar_h(i, bodies)
-                float bl = f_bar_l(i, bodies)
+                float bh = f_pick_h(i, hSrc)
+                float bl = f_pick_l(i, lSrc)
                 h := na(h) ? bh : math.max(h, bh)
                 l := na(l) ? bl : math.min(l, bl)
                 cnt += 1
             else if not f_same_day(i, d0, m0, y0)
                 break
+    else
+        // Today after Start — ALL today bars after HHMM (Extend/N ignored)
+        for i = 1 to maxScan
+            if f_same_day(i, d0, m0, y0)
+                if f_hhmm(i) >= startHhmm
+                    float bh = f_pick_h(i, hSrc)
+                    float bl = f_pick_l(i, lSrc)
+                    h := na(h) ? bh : math.max(h, bh)
+                    l := na(l) ? bl : math.min(l, bl)
+                    cnt += 1
+            else
+                break
     [h, l, cnt]
 
-[hRob, lRob, nRob] = f_robot_hl(lengthIn, robotStartHhmm, useShifted, robotUseBodies)
+[hRob, lRob, nRob] = f_robot_hl(robotMode, robotLookback, robotStartHhmm, robotHSource, robotLSource)
 
 rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
 rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
-winTag = useShifted ? "shift" : "lastN"
-bodyTag = robotUseBodies ? " body" : ""
-srcTxt = isIndian ? "INDIAN prior-day (Length=visual)" : ("ROBOT 1m " + winTag + bodyTag + " >=" + str.tostring(robotStartHhmm) + " n=" + str.tostring(nRob))
+srcTxt = isIndian ? "INDIAN prior-day | Extend=lines only" : ("ROBOT " + robotMode + " | H=" + robotHSource + " L=" + robotLSource + " >=" + str.tostring(robotStartHhmm) + " n=" + str.tostring(nRob) + " | Extend=lines only")
 
 liveC = (rawH + rawL) / 2.0
 liveB = (rawH - rawL) / 2.0
@@ -175,38 +215,41 @@ var float frozenC = na
 var float frozenB = na
 var float frozenH = na
 var float frozenL = na
-var int frozenLen = -1
+var int frozenExt = -1
 var string frozenSeg = "INIT"
 var int frozenDate = -1
 var int frozenHyb = -1
 var int frozenForce = -1
 var int frozenStart = -1
 var int frozenCnt = -1
-var int frozenWin = -1
-var int frozenBody = -1
+var int frozenLB = -1
+var string frozenMode = "INIT"
+var string frozenHS = "INIT"
+var string frozenLS = "INIT"
 
 hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
-winFlag = useShifted ? 1 : 0
-bodyFlag = robotUseBodies ? 1 : 0
-inputsChanged = lengthIn != frozenLen or segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce or robotStartHhmm != frozenStart or winFlag != frozenWin or bodyFlag != frozenBody
+// Extend changes do NOT invalidate C/B snapshot (visual only) — still track for line redraw
+inputsChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce or robotStartHhmm != frozenStart or robotMode != frozenMode or robotLookback != frozenLB or robotHSource != frozenHS or robotLSource != frozenLS
 canSnap = enableLevels and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
-shouldSnapshot = canSnap and (inputsChanged or frozenLen == -1)
+shouldSnapshot = canSnap and (inputsChanged or na(frozenC))
 
 if shouldSnapshot
     frozenC := liveC
     frozenB := liveB
     frozenH := rawH
     frozenL := rawL
-    frozenLen := lengthIn
+    frozenExt := extendLen
     frozenSeg := segment
     frozenDate := anchorDate
     frozenHyb := hybFlag
     frozenForce := forceFlag
     frozenStart := robotStartHhmm
     frozenCnt := nRob
-    frozenWin := winFlag
-    frozenBody := bodyFlag
+    frozenLB := robotLookback
+    frozenMode := robotMode
+    frozenHS := robotHSource
+    frozenLS := robotLSource
 
 C = frozenC
 B = frozenB
@@ -282,7 +325,7 @@ plot(enableLevels and showDnTgts ? dnT4 : na, "Dn T4", color = clrT4, display = 
 var table info = table.new(position.top_right, 1, 4, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
-    table.cell(info, 0, 0, segShort + " | Len " + str.tostring(lengthIn) + " | extR " + str.tostring(extendRight), text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 0, segShort + " | ext " + str.tostring(extendRight) + " (lines only, no future path)", text_color = color.white, text_size = size.small)
     table.cell(info, 0, 1, srcTxt, text_color = color.aqua, text_size = size.small)
     hlTxt = na(frozenH) ? "..." : ("H " + str.tostring(frozenH, format.mintick) + "  L " + str.tostring(frozenL, format.mintick) + "  n=" + str.tostring(frozenCnt))
     table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)

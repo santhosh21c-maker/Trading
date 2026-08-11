@@ -14,35 +14,35 @@ Target 3 = C ± 1.83·B
 Target 4 = C ± 2.08·B
 ```
 
+## Extend = line length only
+
+Under **Robot Prediction**, Extend only lengthens the **horizontal** Decider/Target lines. It does **not** plot a future price path, and it does **not** change C/B.
+
 ## Segments
 
-| Segment | What Length does | H / L source |
-|---------|------------------|--------------|
-| **INDIAN** | Visual line extend only | Prior calendar day H/L (Hybrid 5m optional) |
-| **Robot Prediction** | Changes Decider/Targets **and** extends lines forward | Chart TF (use **1m**). Today only, after **Robot Start HHMM** |
+| Segment | H / L source | Extend |
+|---------|--------------|--------|
+| **INDIAN** | Prior calendar day | Visual only |
+| **Robot Prediction** | Configurable (default: today after Start, H=body high, L=low) | Visual only |
 
-## Why Length 50 showed L ≈ 33
+## Vendor reference (11 Aug 2026, Robot Prediction)
 
-Hybrid 5m + Length pulled the **open crash** (and older bars) into the low. Length 50’s **H ≈ 77.55** was already near the vendor; only **L** was wrong. Length 60’s C looked closer only because a huge H and tiny L averaged near the vendor midpoint — **B was still far too wide**.
+| Contract | Extend (visual) | Decider | Implied H / L / C / B |
+|----------|-----------------|---------|------------------------|
+| CALL 24450 | 60 | 34.77 / 33.18 | H≈47.30 L≈20.65 C≈33.98 B≈13.33 |
+| PUT 24450 | 50 | 13.5 / 12.9 | H≈18.15 L≈8.25 C≈13.20 B≈4.95 |
 
-Robot now **ignores Hybrid** for H/L and skips bars before **Start HHMM** (default `1000` = 10:00 IST).
-
-## Vendor Robot targets (PUT 24500 reference)
-
-| Length | Decider (approx) | Implied C / B / H / L |
-|--------|-------------------|------------------------|
-| 50 | 72.22 / 71.59 | C≈71.90 B≈5.25 H≈77.15 L≈66.65 |
-| 60 | 65.97 / 65.48 | C≈65.73 B≈4.08 H≈69.76 L≈61.69 |
+Note: our earlier PUT run matched **L=8.25** but **H=32.15** (upper wick). Default Robot H source is now **Body high**.
 
 ## Install / test
 
-1. TradingView → Pine Editor → paste `Smart_Robotic_Logic_Decider_Targets.pine`
-2. Chart: **1-minute** CE/PE (Replay OK)
-3. Segment = **Robot Prediction**
-4. Defaults: Window = **Last Length bars**, Start HHMM = **1000**, bodies **off**
-5. Change Length at the comparison time → status chip must show **FROZEN** with new H/L/C/B
-6. If L is still too low, raise Start to `1015` / `1030`. If H/L are too tight/loose, try **Shifted [Len, 2Len)** or bodies on.
+1. Paste `Smart_Robotic_Logic_Decider_Targets.pine` on **1m** CE/PE
+2. Segment = **Robot Prediction**
+3. Defaults: Range = **Today after Start**, H = **Body high**, L = **Low**, Start = **915**
+4. Toggle **Force Recalculate** once after load
+5. Compare status chip H/L/C/B to the table above
+6. If H still high, try H source **Close**, or Range **Last N bars** / **Prior day**
 
 ## Still approximate
 
-Exact vendor bar selection is closed-source. Ladder math after H/L is locked; we are tuning the Robot window so Len 50/60 match the table above.
+Exact vendor bar selection is closed-source. Ladder math after H/L is locked.
