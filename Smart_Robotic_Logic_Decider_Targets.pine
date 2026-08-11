@@ -244,10 +244,10 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
         iTo := tA
     else if mode == "Auto (OR if Ext<60 / Last if Ext>=60)"
         // Clock OR: [Start+Skip, Start+Extend) — Ext50 => 930-1005 (int math)
-        branch := "or"
-        usedLag := 0
         int orStart = f_add_mins(startHhmm, orSkip)
         int orEnd = f_add_mins(startHhmm, len)
+        branch := "or" + str.tostring(orStart) + "-" + str.tostring(orEnd)
+        usedLag := 0
         [hsB, lsB, cB, fB, tB] = f_collect_or_clock(orStart, orEnd, hSrc, lSrc, d0, m0, y0, maxScan)
         [hB, lB] = f_trim_hl(hsB, lsB, 0.0, 0.0)
         h := hB
@@ -255,9 +255,6 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
         cnt := cB
         iFrom := fB
         iTo := tB
-        // Encode intended clock span into usedLag for chip: orStart*10000+orEnd is too big;
-        // keep usedLag=orStart so chip can show planned start if needed
-        usedLag := orStart
     else if mode == "Last Ext bars"
         branch := "last"
         usedLag := manualLag
