@@ -29,12 +29,12 @@ hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, toolti
 grpRobot = "Robot Prediction"
 robotMode = input.string("Auto OR-Last", "Robot Window", options = ["Auto OR-Last", "Last Ext bars", "First Ext bars", "Offset Ext to 2Ext"], group = grpRobot, tooltip = "Auto OR-Last: Ext<60 = opening range 930-1005; Ext>=60 = last N bars.")
 robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot)
-robotOrSkipMins = input.int(15, "OR Skip Open (mins)", minval = 0, maxval = 60, group = grpRobot, tooltip = "Ext50 OR starts Start+Skip. 15 => 09:30–10:05 for Ext50 (skips L~40 open crash).")
-robotLagManual = input.int(0, "Manual Lag (Last mode)", minval = 0, maxval = 500, group = grpRobot)
+robotOrSkipMins = input.int(15, "OR Skip Open mins", minval = 0, maxval = 60, group = grpRobot, tooltip = "Ext50 OR starts Start+Skip. 15 => 09:30-10:05 for Ext50.")
+robotLagManual = input.int(0, "Manual Lag Last mode", minval = 0, maxval = 500, group = grpRobot)
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
-robotTrimHighPct = input.float(10.0, "Trim highs % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Prior chip H73→~70 with ~10% high trim (aim H69.75).")
-robotTrimLowPct = input.float(25.0, "Trim lows % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Lift L 59→~62 toward aim L61.70. Chip L59.65 needed ~+2.")
+robotTrimHighPct = input.float(10.0, "Trim highs pct Last Ext60", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Prior chip high trim toward aim.")
+robotTrimLowPct = input.float(25.0, "Trim lows pct Last Ext60", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Lift lows toward aim.")
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
 robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
