@@ -1,44 +1,43 @@
 //@version=6
 // Smart Robotic Logic - Decider and Targets (Educational recreation)
 //
-// LADDER (verified on vendor screenshots):
+// LADDER:
 //   C = (H+L)/2 , B = (H-L)/2
 //   Decider = C +/- 0.06*B
 //   Targets = C +/- {1, 1.54, 1.83, 2.08}*B
 //
-// SEGMENT + EXTEND (confirmed):
-//   ROBOT PREDICTION:
-//     Extend = prediction lookback only.
-//     Changing Extend MUST change Decider/Target PRICE levels (Y positions).
-//     Extend does NOT lengthen the lines. Lines use extend.right (fixed visual).
-//   INDIAN:
-//     Levels FIXED for the day (prior-day H/L).
-//     Extend ONLY lengthens horizontal lines. Levels do not move.
+// SEGMENT + EXTEND:
+//   ROBOT: Extend = lookback only (changes H/L => Decider/Targets move on Y).
+//          Lines use a FIXED bar length (not Extend, not extend.right full chart).
+//   INDIAN: levels fixed (prior day). Extend = line length only.
 //
-// Vendor Robot PUT 24500 targets:
-//   Ext 50 => Decider 72.22/71.59  H~77.15 L~66.65  C~71.91 B~5.25
-//   Ext 60 => Decider 65.97/65.48  H~69.75 L~61.70  C~65.73 B~4.03
-//   Note: H50 > H60 at same moment => window cannot be nested last-N.
-//         Use shifted block [Extend, 2*Extend) so Ext 50 and 60 differ.
+// Vendor Robot PUT 24500:
+//   Ext 50 => Decider 72.22/71.59  H~77.15 L~66.65
+//   Ext 60 => Decider 65.97/65.48  H~69.75 L~61.70
+//
+// Why shift[60] failed: window [60,120) reached open crash => L~29.
+// Default is now Last Ext bars after Start HHMM (skip open).
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
-extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: lookback only — changes Decider/Target values, does NOT lengthen lines. INDIAN: line length only — levels stay fixed.")
+extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: lookback bars (changes Decider/Targets). INDIAN: visual line length only.")
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpMain)
-hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN prior-day on 5m. Robot always uses chart TF (use 1m).")
+hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
 grpRobot = "Robot Prediction"
-robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot)
-robotWindow = input.string("Shifted [Ext, 2Ext)", "Robot Window", options = ["Shifted [Ext, 2Ext)", "Last Ext bars", "First Ext bars"], group = grpRobot, tooltip = "Shifted allows Ext50 H > Ext60 H (vendor). Last/First are nested.")
+robotStartHhmm = input.int(1000, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "Skip bars before this time. 1000 avoids open L~29 spike. Try 1015 if L still low.")
+robotWindow = input.string("Last Ext bars", "Robot Window", options = ["Last Ext bars", "First Ext bars", "Shifted [Ext, 2Ext)"], group = grpRobot, tooltip = "Last Ext = most recent Extend bars after Start. Prefer this over Shifted (Shifted Ext60 pulled L~29).")
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
+robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot, tooltip = "Fixed line length for Robot. NOT tied to Extend.")
+robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
-grpSnap = "Snapshot / Lines"
+grpSnap = "Snapshot / Indian Lines"
 forceRecalc = input.bool(false, "Force Recalculate Now", group = grpSnap)
-extendLeft = input.int(120, "Extend Lines Left (bars)", minval = 0, maxval = 500, group = grpSnap)
+indianLineLeft = input.int(60, "Indian Line Left (bars)", minval = 0, maxval = 500, group = grpSnap)
 indianExtraRight = input.int(0, "Indian Extra Right (bars)", minval = 0, maxval = 500, group = grpSnap)
 
 grpShow = "Show / Hide"
@@ -67,8 +66,6 @@ lineWidth = input.int(1, "Line Width", minval = 1, maxval = 3, group = grpStyle)
 isIndian = segment == "INDIAN - Index, Stock & Option"
 isRobot = not isIndian
 tz = "Asia/Kolkata"
-
-// INDIAN: Extend = visual right length. ROBOT: lines go to right edge (Extend does not lengthen).
 indianRight = extendIn + indianExtraRight
 
 f_hhmm(int idx) =>
@@ -83,7 +80,6 @@ f_pick_h(int idx, string src) =>
 f_pick_l(int idx, string src) =>
     src == "Close" ? close[idx] : src == "Body low" ? math.min(open[idx], close[idx]) : low[idx]
 
-// INDIAN: prior calendar day — Extend never used here
 f_prior_day_hl() =>
     int d0 = dayofmonth(time, tz)
     int m0 = month(time, tz)
@@ -118,7 +114,6 @@ f_prior_day_hl() =>
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
 
-// ROBOT: Extend-sized window. Shifted by default so Ext50/Ext60 can differ (incl. H50>H60).
 f_robot_hl(int len, int startHhmm, string winMode, string hSrc, string lSrc) =>
     float h = na
     float l = na
@@ -139,7 +134,6 @@ f_robot_hl(int len, int startHhmm, string winMode, string hSrc, string lSrc) =>
                     h := na(h) ? bh : math.max(h, bh)
                     l := na(l) ? bl : math.min(l, bl)
                     cnt += 1
-        // If shifted block too thin, fall back to last `len` valid bars
         if cnt < math.max(5, int(len * 0.25))
             h := na
             l := na
@@ -173,7 +167,7 @@ f_robot_hl(int len, int startHhmm, string winMode, string hSrc, string lSrc) =>
                     if cnt >= len
                         break
     else
-        // Last Ext bars
+        // Last Ext bars after Start — default
         for i = 1 to maxScan
             if cnt >= len
                 break
@@ -193,7 +187,7 @@ rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
 rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
 
 winTag = robotWindow == "Shifted [Ext, 2Ext)" ? "shift" : robotWindow == "First Ext bars" ? "first" : "last"
-srcTxt = isIndian ? "INDIAN prior-day FIXED | Ext=line length only" : ("ROBOT " + winTag + "[" + str.tostring(extendIn) + "] n=" + str.tostring(nRob) + " | Ext changes LEVELS, not line length")
+srcTxt = isIndian ? "INDIAN prior-day FIXED | Ext=line length" : ("ROBOT " + winTag + "[" + str.tostring(extendIn) + "] >=" + str.tostring(robotStartHhmm) + " n=" + str.tostring(nRob))
 
 liveC = (rawH + rawL) / 2.0
 liveB = (rawH - rawL) / 2.0
@@ -215,13 +209,9 @@ var int frozenN = -1
 
 hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
-
-// INDIAN: Extend must NOT resnapshot levels
-// ROBOT: Extend MUST resnapshot levels
 baseChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
 robotChanged = baseChanged or extendIn != frozenExt or robotStartHhmm != frozenStart or robotWindow != frozenWin or robotHSource != frozenHS or robotLSource != frozenLS
 recipeChanged = isIndian ? baseChanged : robotChanged
-
 canSnap = enableLevels and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
 shouldSnapshot = canSnap and (recipeChanged or na(frozenC))
 
@@ -269,22 +259,20 @@ f_clear() =>
 
 f_level(float price, string txt, color lineCol, bool showLine) =>
     if not na(price) and showLine
-        int x1 = bar_index - extendLeft
-        // ROBOT: extend.right — Extend does not control length
-        // INDIAN: fixed bar length from Extend
+        int x1 = 0
+        int x2 = 0
         if isRobot
-            line ln = line.new(x1, price, bar_index, price, xloc = xloc.bar_index, extend = extend.right, color = lineCol, style = line.style_dashed, width = lineWidth)
-            array.push(lines, ln)
-            if showLabels
-                label lb = label.new(bar_index, price, txt + " / " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(lineCol, 85), textcolor = lineCol, size = size.small)
-                array.push(labels, lb)
+            // Fixed short segment — Extend does not control length
+            x1 := bar_index - robotLineLeft
+            x2 := bar_index + robotLineRight
         else
-            int x2 = bar_index + indianRight
-            line ln = line.new(x1, price, x2, price, xloc = xloc.bar_index, extend = extend.none, color = lineCol, style = line.style_dashed, width = lineWidth)
-            array.push(lines, ln)
-            if showLabels
-                label lb = label.new(x2, price, txt + " / " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(lineCol, 85), textcolor = lineCol, size = size.small)
-                array.push(labels, lb)
+            x1 := bar_index - indianLineLeft
+            x2 := bar_index + indianRight
+        line ln = line.new(x1, price, x2, price, xloc = xloc.bar_index, extend = extend.none, color = lineCol, style = line.style_dashed, width = lineWidth)
+        array.push(lines, ln)
+        if showLabels
+            label lb = label.new(x2, price, txt + " / " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(lineCol, 85), textcolor = lineCol, size = size.small)
+            array.push(labels, lb)
 
 if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
     f_clear()
@@ -312,18 +300,16 @@ plot(enableLevels ? C : na, "Centre C", color = clrCenter, display = display.dat
 plot(enableLevels ? B : na, "Base B", color = clrCenter, display = display.data_window)
 plot(enableLevels and showDecider ? decHi : na, "Decider High", color = clrDecider, display = display.data_window)
 plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = clrDecider, display = display.data_window)
-plot(enableLevels and showUpTgts ? upT1 : na, "Up T1", color = clrT1, display = display.data_window)
-plot(enableLevels and showDnTgts ? dnT1 : na, "Dn T1", color = clrT1, display = display.data_window)
 
 var table info = table.new(position.top_right, 1, 5, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
-    extNote = isIndian ? "Ext=LINE LENGTH" : "Ext=LEVELS ONLY (no line lengthen)"
+    extNote = isIndian ? "Ext=LINE LEN" : "Ext=LOOKBACK (levels move)"
     table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + " | " + extNote, text_color = color.white, text_size = size.small)
     table.cell(info, 0, 1, srcTxt, text_color = color.aqua, text_size = size.small)
     hlTxt = na(frozenH) ? "..." : ("H " + str.tostring(frozenH, format.mintick) + "  L " + str.tostring(frozenL, format.mintick) + "  n=" + str.tostring(frozenN))
     table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)
     cbTxt = na(C) ? "Waiting..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick) + "  FROZEN")
     table.cell(info, 0, 3, cbTxt, text_color = color.yellow, text_size = size.small)
-    decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick))
-    table.cell(info, 0, 4, decTxt, text_color = color.orange, text_size = size.small)
+    decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick) + "  aim50:72.22/71.59 aim60:65.97/65.48")
+    table.cell(info, 0, 4, decTxt, text_color = color.orange, text_size = size.tiny)
