@@ -6,31 +6,31 @@
 //   Decider = C +/- 0.06*B
 //   Targets = C +/- {1, 1.54, 1.83, 2.08}*B
 //
-// BEHAVIOUR (confirmed working on user PUT 24500 screenshots):
-//   ROBOT: Extend changes Decider/Targets (Y). Levels LIVE.
-//   INDIAN: prior-day frozen; Extend = line length only.
+// BEHAVIOUR:
+//   ROBOT: Extend changes levels (LIVE). Lines = fixed short length.
+//   INDIAN: prior-day FROZEN. Extend = line length only.
 //
 // Vendor aim PUT 24500:
 //   Ext 50 => Dec 72.22/71.59  H~77.15 L~66.65
 //   Ext 60 => Dec 65.97/65.48  H~69.75 L~61.70
 //
-// User replay ~11:00 with offset+Start1000 gave:
-//   Ext50 n=11 H67.70 L59.10 | Ext60 n=1 H65.30 L61.90
-//   Ext60 n=1 because bars[60..89] were mostly before 10:00.
-// Fix: Start 915 + Width=Extend => [Ext, 2Ext), full bar count.
+// Latest user chips (offset + Start 915):
+//   Ext50: H79.25 L59.10 Dec69.80/68.55  (closer)
+//   Ext60: H79.25 L29.00 Dec55.65/52.60  (open crash in [60..119])
+// Default now: First Ext bars after 10:00 — skips open L~29.
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
-extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: lookback offset — window [Ext, 2*Ext). Must change Decider. INDIAN: line length only.")
+extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: lookback size (changes Decider/Targets). INDIAN: line length only.")
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpMain)
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
 grpRobot = "Robot Prediction"
-robotMode = input.string("Offset [Ext, 2Ext)", "Robot Window", options = ["Offset [Ext, 2Ext)", "Last Ext bars", "First Ext bars"], group = grpRobot)
-robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "915 = full RTH. 1000 skipped almost all Ext60 offset bars (n=1).")
+robotMode = input.string("First Ext bars", "Robot Window", options = ["First Ext bars", "Last Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot, tooltip = "First Ext after Start: Ext50=10:00-10:49, Ext60=10:00-10:59. Avoids open L~29 that wrecked Offset Ext60.")
+robotStartHhmm = input.int(1000, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "1000 skips open crash. Use 915 only with care.")
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
@@ -133,14 +133,35 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc) =>
             if cnt >= len
                 break
             if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                float bh = f_pick_h(i, hSrc)
-                float bl = f_pick_l(i, lSrc)
-                h := na(h) ? bh : math.max(h, bh)
-                l := na(l) ? bl : math.min(l, bl)
+                h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
+                l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
                 cnt += 1
             else if not f_same_day(i, d0, m0, y0)
                 break
-    else if mode == "First Ext bars"
+    else if mode == "Offset [Ext, 2Ext)"
+        iFrom := len
+        iTo := 2 * len - 1
+        if iFrom <= bar_index
+            int iEnd = math.min(iTo, bar_index)
+            for i = iFrom to iEnd
+                if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
+                    h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
+                    l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
+                    cnt += 1
+        // If open-filter left window thin, grow toward NOW (never older / into open)
+        if cnt < math.max(10, int(len * 0.5))
+            for i = len - 1 to 1
+                if cnt >= len
+                    break
+                if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
+                    h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
+                    l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
+                    cnt += 1
+                    iFrom := i
+                else if not f_same_day(i, d0, m0, y0)
+                    break
+    else
+        // First Ext bars after Start (default) — oldest qualifying bars today
         int dayBars = 0
         for i = 1 to maxScan
             if f_same_day(i, d0, m0, y0)
@@ -152,26 +173,14 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc) =>
         if dayBars > 0
             for i = dayBars to 1
                 if f_hhmm(i) >= startHhmm
-                    float bh = f_pick_h(i, hSrc)
-                    float bl = f_pick_l(i, lSrc)
-                    h := na(h) ? bh : math.max(h, bh)
-                    l := na(l) ? bl : math.min(l, bl)
+                    h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
+                    l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
                     cnt += 1
+                    if cnt == 1
+                        iFrom := i
+                    iTo := i
                     if cnt >= len
                         break
-    else
-        // Offset [Ext, 2Ext) — Ext50 and Ext60 use different bar index sets
-        iFrom := len
-        iTo := 2 * len - 1
-        if iFrom <= bar_index
-            int iEnd = math.min(iTo, bar_index)
-            for i = iFrom to iEnd
-                if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-                    float bh = f_pick_h(i, hSrc)
-                    float bl = f_pick_l(i, lSrc)
-                    h := na(h) ? bh : math.max(h, bh)
-                    l := na(l) ? bl : math.min(l, bl)
-                    cnt += 1
     [h, l, cnt, iFrom, iTo]
 
 [hRob, lRob, nRob, i0, i1] = f_robot_hl(extendIn, robotStartHhmm, robotMode, robotHSource, robotLSource)
@@ -180,30 +189,6 @@ rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
 rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
 liveC = (rawH + rawL) / 2.0
 liveB = (rawH - rawL) / 2.0
-
-// Diagnostic: nested last-N sameness at this bar
-f_last_n(int len, int startHhmm, string hSrc, string lSrc) =>
-    float h = na
-    float l = na
-    int cnt = 0
-    int d0 = dayofmonth(time, tz)
-    int m0 = month(time, tz)
-    int y0 = year(time, tz)
-    int maxScan = math.min(bar_index, 5000)
-    for i = 1 to maxScan
-        if cnt >= len
-            break
-        if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
-            h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
-            l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
-            cnt += 1
-        else if not f_same_day(i, d0, m0, y0)
-            break
-    [h, l]
-
-[hL50, lL50] = f_last_n(50, robotStartHhmm, robotHSource, robotLSource)
-[hL60, lL60] = f_last_n(60, robotStartHhmm, robotHSource, robotLSource)
-lastNsame = not na(hL50) and hL50 == hL60 and lL50 == lL60
 
 var float frozenC = na
 var float frozenB = na
@@ -294,21 +279,19 @@ plot(enableLevels ? B : na, "Base B", color = clrCenter, display = display.data_
 plot(enableLevels and showDecider ? decHi : na, "Decider High", color = clrDecider, display = display.data_window)
 plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = clrDecider, display = display.data_window)
 
-var table info = table.new(position.top_right, 1, 6, bgcolor = color.new(color.black, 80), border_width = 0)
+var table info = table.new(position.top_right, 1, 5, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
     table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + (isRobot ? " | LIVE" : " | FROZEN"), text_color = color.white, text_size = size.small)
     if isRobot
-        modeTag = robotMode == "Last Ext bars" ? "last" : robotMode == "First Ext bars" ? "first" : "offset"
-        table.cell(info, 0, 1, modeTag + " [" + str.tostring(i0) + ".." + str.tostring(i1) + "] n=" + str.tostring(nRob) + " >=" + str.tostring(robotStartHhmm), text_color = color.aqua, text_size = size.small)
-        table.cell(info, 0, 2, lastNsame ? "at this bar last50==last60" : "at this bar last50!=last60", text_color = lastNsame ? color.orange : color.green, text_size = size.tiny)
+        modeTag = robotMode == "Last Ext bars" ? "last" : robotMode == "Offset [Ext, 2Ext)" ? "offset" : "first"
+        table.cell(info, 0, 1, modeTag + " n=" + str.tostring(nRob) + " >=" + str.tostring(robotStartHhmm) + " idx " + str.tostring(i0) + ".." + str.tostring(i1), text_color = color.aqua, text_size = size.small)
     else
         table.cell(info, 0, 1, "prior-day | Ext=line length", text_color = color.aqua, text_size = size.small)
-        table.cell(info, 0, 2, "", text_color = color.gray, text_size = size.tiny)
     hlTxt = na(dispH) ? "Waiting..." : ("H " + str.tostring(dispH, format.mintick) + "  L " + str.tostring(dispL, format.mintick))
-    table.cell(info, 0, 3, hlTxt, text_color = color.silver, text_size = size.small)
+    table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)
     cbTxt = na(C) ? "..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick))
-    table.cell(info, 0, 4, cbTxt, text_color = color.yellow, text_size = size.small)
+    table.cell(info, 0, 3, cbTxt, text_color = color.yellow, text_size = size.small)
     aim = extendIn == 60 ? "aim 65.97/65.48" : extendIn == 50 ? "aim 72.22/71.59" : ""
     decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick) + "  " + aim)
-    table.cell(info, 0, 5, decTxt, text_color = color.orange, text_size = size.small)
+    table.cell(info, 0, 4, decTxt, text_color = color.orange, text_size = size.small)
