@@ -5,8 +5,9 @@
 // Decider = C +/- 0.06*B
 // Target N = C +/- {1, 1.54, 1.83, 2.08} * B
 //
-// INDIAN  -> H/L from bars BEFORE today (prior sessions), freeze at session open
-// ROBOT   -> H/L from last Length bars (includes today), freeze on input change
+// INDIAN  -> last Length bars BEFORE today (prior sessions only)
+// ROBOT   -> last Length bars OF today only (excludes yesterday's 29-30 lows)
+//             PUT L50 vendor: H=77.15 L=66.65 -> Dec 72.22/71.59
 
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
@@ -65,11 +66,21 @@ f_hl_indian(int len) =>
             cnt += 1
     [h, l]
 
+// ROBOT: last N bars of TODAY only (post-gap session range, not prior-day lows)
 f_hl_robot(int len, string mode) =>
-    float hiNow = ta.highest(high, len)
-    float loNow = ta.lowest(low, len)
-    float h = mode == "Future" ? hiNow : hiNow[1]
-    float l = mode == "Future" ? loNow : loNow[1]
+    float h = na
+    float l = na
+    int cnt = 0
+    int todayStart = time("D")
+    int startI = mode == "Future" ? 0 : 1
+    int maxScan = math.min(bar_index, 5000)
+    for i = startI to maxScan
+        if cnt >= len
+            break
+        if time[i] >= todayStart
+            h := na(h) ? high[i] : math.max(h, high[i])
+            l := na(l) ? low[i] : math.min(l, low[i])
+            cnt += 1
     [h, l]
 
 [hIndOwn, lIndOwn] = f_hl_indian(lengthIn)
@@ -194,7 +205,7 @@ var table info = table.new(position.top_right, 1, 3, bgcolor = color.new(color.b
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
     tfTxt = hybrid5m ? "5m Hybrid" : timeframe.period
-    srcTxt = isIndian ? "prior-day" : "recent"
+    srcTxt = isIndian ? "prior-day" : "today-only"
     table.cell(info, 0, 0, segShort + " | Len " + str.tostring(lengthIn) + " | " + tfTxt + " | " + srcTxt, text_color = color.white, text_size = size.small)
     hlTxt = na(frozenH) ? "..." : ("H " + str.tostring(frozenH, format.mintick) + "  L " + str.tostring(frozenL, format.mintick))
     table.cell(info, 0, 1, hlTxt, text_color = color.silver, text_size = size.small)
