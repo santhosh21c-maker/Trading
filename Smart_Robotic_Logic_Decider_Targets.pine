@@ -1,45 +1,63 @@
 //@version=5
 // Smart Robotic Logic – Decider & Targets (Educational recreation)
 //
-// Corrected model (cross-checked against chart arithmetic):
-//   C  = ladder centre (default: pivot of lookback H/L/C)
-//   B  = ladder base step (default: Range × base fraction)
-//   Decider  = C ± 0.06·B          ← NOT a CPR TC/BC band
-//   Target N = C ± ratioN·B        ← ratios ≈ 1 : 1.54 : 1.83 : 2.08
+// Verified from your 7-screenshot sequence (11 Aug 24500 CE/PE):
 //
-// Why CPR was wrong for the gap:
-//   CPR width = (2C − H − L)/3 varies with where Close sits in the range
-//   (often ~3–14% of range). Your Decider gaps are a fixed 0.12·B on
-//   both Call and Put — that only fits C ± 0.06·B, not TC/BC.
+//   STATIC: levels do NOT move bar-to-bar. They only recalculate when
+//           Segment or Length (or Date / Hybrid) inputs change.
 //
-// How to use:
-// 1. TradingView → Pine Editor → Paste → Add to chart
-// 2. Option premium chart (1m recommended), Hybrid 5m ON
-// 3. Change Length 50→60 to see C/B (and all levels) shift
+//   LADDER (same on Indian & Robot Prediction once C and B are known):
+//           Decider  = C ± 0.06·B     (gap = 0.12·B)
+//           Target1  = C ± 1.00·B
+//           Target2  = C ± 1.54·B
+//           Target3  = C ± 1.83·B
+//           Target4  = C ± 2.08·B
+//
+//   SEGMENT: "INDIAN - Index, Stock & Option" and "Robot Prediction"
+//           use DIFFERENT recipes for C and B (same ladder afterward).
+//
+// Measured examples (PUT 24500):
+//   Indian  L80 → C≈39.53  B≈8.78   Decider ≈ 40.05 / 39.00
+//   Robot   L50 → C≈71.91  B≈5.25   Decider ≈ 72.22 / 71.59
+//   Robot   L60 → C≈63.35  B≈3.85   Decider ≈ 63.58 / 63.12
 
 indicator("Smart Robotic Logic – Decider & Targets", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ═══════════════════════════════════════════════════════════════
-// INPUTS
+// INPUTS  (mirrors vendor settings you showed)
 // ═══════════════════════════════════════════════════════════════
 grpRobot     = "Robot Targets"
-enableLevels = input.bool(true,  "Enable Automated Levels", group=grpRobot)
-lengthIn     = input.int(50,     "Extend => Length", minval=2, maxval=500, group=grpRobot,
-     tooltip="Lookback bars for H/L/C used to build centre C and base B. 50→60 shifts Decider & Targets.")
+enableLevels = input.bool(true, "Enable Automated Levels", group=grpRobot)
+
+segment      = input.string("Robot Prediction", "Segment",
+     options=["INDIAN - Index, Stock & Option", "Robot Prediction"], group=grpRobot,
+     tooltip="Indian and Robot Prediction produce different C/B (different centre & base). Ladder ratios stay the same.")
+
+lengthIn     = input.int(50, "Extend => Length", minval=2, maxval=500, group=grpRobot,
+     tooltip="Calculation window size. Changing 50→60 freezes a NEW ladder; levels then stay fixed until you change it again.")
+
+anchorDate   = input.time(timestamp("2026-08-11T00:00:00"), "Anchor Date", group=grpRobot,
+     tooltip="Matches the vendor date picker. Used as session/day anchor for the snapshot.")
+
+hybrid5m     = input.bool(true, "Hybrid (Force 5 Min Values)", group=grpRobot,
+     tooltip="Build C/B from 5-minute bars even on a 1-minute options chart.")
+
 winMode      = input.string("Current", "Window Mode", options=["Current", "Future"], group=grpRobot,
-     tooltip="Current = confirmed lookback (excludes forming bar). Future = developing window.")
-centerMode   = input.string("Pivot (H+L+C)/3", "Centre C source",
-     options=["Pivot (H+L+C)/3", "Close", "HL2 (H+L)/2", "HLC3"], group=grpRobot,
-     tooltip="Midpoint of the Decider band. Pivot remains a live hypothesis; switch if levels don't match.")
-baseMode     = input.string("Range × Fraction", "Base B source",
-     options=["Range × Fraction", "ATR"], group=grpRobot)
-baseFrac     = input.float(0.382, "Base B = Range ×", step=0.001, group=grpRobot,
-     tooltip="Used when Base B source = Range × Fraction. B becomes Target-1 distance.")
-atrLen       = input.int(14, "ATR Length (if ATR base)", minval=1, group=grpRobot)
-hybrid5m     = input.bool(true,  "Hybrid (Force 5 Min Values)", group=grpRobot,
-     tooltip="Calculate on 5-minute timeframe, plot on current chart.")
-extendRight  = input.int(30, "Extend Lines Right (bars)", minval=0, maxval=500, group=grpRobot)
-extendLeft   = input.int(80, "Extend Lines Left (bars)",  minval=0, maxval=500, group=grpRobot)
+     tooltip="Current = confirmed bars only. Future = include forming bar.")
+
+// Optional: Indian segment can pull H/L/C from an index ticker instead of the option
+grpIndian    = "INDIAN Segment Source"
+useIndexForIndian = input.bool(false, "Use Index Symbol for Indian C/B", group=grpIndian,
+     tooltip="If on, Indian segment reads H/L/C from the index symbol below (via request.security).")
+indexSymbol  = input.symbol("NSE:NIFTY", "Index Symbol", group=grpIndian)
+
+grpSnap      = "Snapshot / Freeze"
+// Levels freeze after each input-driven recalculation (matches your observation)
+forceRecalc  = input.bool(false, "Force Recalculate Now", group=grpSnap,
+     tooltip="Toggle off→on→off to take a fresh snapshot without changing Length/Segment.")
+
+extendRight  = input.int(50, "Extend Lines Right (bars)", minval=0, maxval=500, group=grpSnap)
+extendLeft   = input.int(120,"Extend Lines Left (bars)",  minval=0, maxval=500, group=grpSnap)
 
 grpShow      = "Show / Hide"
 showDecider  = input.bool(true,  "Show Decider", group=grpShow)
@@ -48,15 +66,22 @@ showDnTgts   = input.bool(true,  "Show Lower Targets", group=grpShow)
 showLabels   = input.bool(true,  "Show Labels", group=grpShow)
 showCenter   = input.bool(false, "Show Centre C", group=grpShow)
 
-grpLadder    = "Ladder (× Base B)"
-// Decider half-gap = 0.06·B  →  full Decider gap = 0.12·B  (measured on your charts)
-deciderFrac  = input.float(0.06, "Decider ± × B", step=0.001, group=grpLadder,
-     tooltip="Deciders are C ± this×B. Gap between the two Decider lines = 2 × this × B = 0.12B at default.")
-// Observed Target distance ratios from centre: 1 : 1.54 : 1.83 : 2.08
+grpLadder    = "Ladder (× Base B) — verified"
+deciderFrac  = input.float(0.06, "Decider ± × B", step=0.001, group=grpLadder)
 t1Ratio      = input.float(1.00, "Target 1 × B", step=0.01, group=grpLadder)
 t2Ratio      = input.float(1.54, "Target 2 × B", step=0.01, group=grpLadder)
 t3Ratio      = input.float(1.83, "Target 3 × B", step=0.01, group=grpLadder)
 t4Ratio      = input.float(2.08, "Target 4 × B", step=0.01, group=grpLadder)
+
+// Segment-specific base fractions (starting points — tune until Target 1 matches vendor)
+grpTune      = "Tune C / B per Segment"
+robotCenter  = input.string("Pivot (H+L+C)/3", "Robot – Centre",
+     options=["Pivot (H+L+C)/3", "Close", "HL2 (H+L)/2"], group=grpTune)
+robotBaseFrac= input.float(0.382, "Robot – B = Range ×", step=0.001, group=grpTune)
+indianCenter = input.string("Pivot (H+L+C)/3", "Indian – Centre",
+     options=["Pivot (H+L+C)/3", "Close", "HL2 (H+L)/2"], group=grpTune)
+indianBaseFrac = input.float(0.500, "Indian – B = Range ×", step=0.001, group=grpTune,
+     tooltip="Indian often needs a different base fraction than Robot Prediction.")
 
 grpStyle     = "Colors"
 colDecider   = input.color(color.new(#9E9E9E, 0), "Decider",  group=grpStyle)
@@ -68,7 +93,7 @@ colCenter    = input.color(color.new(#787B86, 0), "Centre",   group=grpStyle)
 lineWidth    = input.int(1, "Line Width", minval=1, maxval=3, group=grpStyle)
 
 // ═══════════════════════════════════════════════════════════════
-// LOOKBACK H / L / C  (optional Hybrid → 5 minute)
+// LIVE H/L/C ENGINE (used only at snapshot time)
 // ═══════════════════════════════════════════════════════════════
 f_hlc(int len, string mode) =>
     float h = mode == "Future" ? ta.highest(high, len) : ta.highest(high, len)[1]
@@ -76,49 +101,80 @@ f_hlc(int len, string mode) =>
     float c = mode == "Future" ? close                 : close[1]
     [h, l, c]
 
-f_atr(int len, string mode) =>
-    mode == "Future" ? ta.atr(len) : ta.atr(len)[1]
-
-[hLtf, lLtf, cLtf] = f_hlc(lengthIn, winMode)
-atrLtf = f_atr(atrLen, winMode)
-
-[h5, l5, c5] = request.security(syminfo.tickerid, "5", f_hlc(lengthIn, winMode), lookahead=barmerge.lookahead_off)
-atr5         = request.security(syminfo.tickerid, "5", f_atr(atrLen, winMode), lookahead=barmerge.lookahead_off)
-
-float useH   = hybrid5m ? h5    : hLtf
-float useL   = hybrid5m ? l5    : lLtf
-float useCl  = hybrid5m ? c5    : cLtf
-float useAtr = hybrid5m ? atr5  : atrLtf
-float useRng = useH - useL
-
-// ═══════════════════════════════════════════════════════════════
-// LADDER MATH:  C, B, Decider, Targets
-// ═══════════════════════════════════════════════════════════════
 f_center(float h, float l, float c, string mode) =>
     switch mode
-        "Close"           => c
-        "HL2 (H+L)/2"     => (h + l) / 2.0
-        "HLC3"            => (h + l + c) / 3.0
-        => (h + l + c) / 3.0   // Pivot default
+        "Close"       => c
+        "HL2 (H+L)/2" => (h + l) / 2.0
+        => (h + l + c) / 3.0
 
-float C = f_center(useH, useL, useCl, centerMode)
-float B = baseMode == "ATR" ? useAtr : useRng * baseFrac
+[hOwn, lOwn, cOwn] = f_hlc(lengthIn, winMode)
+[h5, l5, c5]       = request.security(syminfo.tickerid, "5", f_hlc(lengthIn, winMode), lookahead=barmerge.lookahead_off)
+[hIdx, lIdx, cIdx] = request.security(indexSymbol, hybrid5m ? "5" : timeframe.period, f_hlc(lengthIn, winMode), lookahead=barmerge.lookahead_off)
+
+bool isIndian = segment == "INDIAN - Index, Stock & Option"
+
+float rawH = isIndian and useIndexForIndian ? hIdx : (hybrid5m ? h5 : hOwn)
+float rawL = isIndian and useIndexForIndian ? lIdx : (hybrid5m ? l5 : lOwn)
+float rawC = isIndian and useIndexForIndian ? cIdx : (hybrid5m ? c5 : cOwn)
+float rawRng = rawH - rawL
+
+string cMode = isIndian ? indianCenter : robotCenter
+float  bFrac = isIndian ? indianBaseFrac : robotBaseFrac
+
+float liveC = f_center(rawH, rawL, rawC, cMode)
+float liveB = rawRng * bFrac
+
+// ═══════════════════════════════════════════════════════════════
+// FREEZE: snapshot C/B only when inputs change (or first run)
+// This is what makes levels "stay constant till Length/Segment changes"
+// ═══════════════════════════════════════════════════════════════
+var float frozenC = na
+var float frozenB = na
+var int   frozenLen = na
+var string frozenSeg = na
+var int   frozenDate = na
+var bool  frozenHyb = na
+var bool  frozenForce = na
+var float frozenH = na
+var float frozenL = na
+var float frozenCl = na
+
+bool inputsChanged =
+     na(frozenC) or
+     lengthIn != frozenLen or
+     segment != frozenSeg or
+     anchorDate != frozenDate or
+     hybrid5m != frozenHyb or
+     forceRecalc != frozenForce
+
+if barstate.islast and enableLevels and inputsChanged and not na(liveC) and not na(liveB) and liveB > 0
+    frozenC     := liveC
+    frozenB     := liveB
+    frozenLen   := lengthIn
+    frozenSeg   := segment
+    frozenDate  := anchorDate
+    frozenHyb   := hybrid5m
+    frozenForce := forceRecalc
+    frozenH     := rawH
+    frozenL     := rawL
+    frozenCl    := rawC
+
+float C = frozenC
+float B = frozenB
 
 float decHi = C + deciderFrac * B
 float decLo = C - deciderFrac * B
-
-float upT1 = C + t1Ratio * B
-float upT2 = C + t2Ratio * B
-float upT3 = C + t3Ratio * B
-float upT4 = C + t4Ratio * B
-
-float dnT1 = C - t1Ratio * B
-float dnT2 = C - t2Ratio * B
-float dnT3 = C - t3Ratio * B
-float dnT4 = C - t4Ratio * B
+float upT1  = C + t1Ratio * B
+float upT2  = C + t2Ratio * B
+float upT3  = C + t3Ratio * B
+float upT4  = C + t4Ratio * B
+float dnT1  = C - t1Ratio * B
+float dnT2  = C - t2Ratio * B
+float dnT3  = C - t3Ratio * B
+float dnT4  = C - t4Ratio * B
 
 // ═══════════════════════════════════════════════════════════════
-// DRAW HELPERS
+// DRAW (static lines from frozen ladder)
 // ═══════════════════════════════════════════════════════════════
 var line[]  lines  = array.new_line()
 var label[] labels = array.new_label()
@@ -146,48 +202,41 @@ f_level(float price, string txt, color col, bool showLine) =>
                  color=color.new(col, 85), textcolor=col, size=size.small)
             array.push(labels, lb)
 
-// ═══════════════════════════════════════════════════════════════
-// RENDER
-// ═══════════════════════════════════════════════════════════════
 if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
     f_clear()
-
     if showDecider
         f_level(decHi, "💔 Decider", colDecider, true)
         f_level(decLo, "💔 Decider", colDecider, true)
-
     if showCenter
         f_level(C, "Centre", colCenter, true)
-
     if showUpTgts
         f_level(upT1, "😇 Target 1", colT1, true)
         f_level(upT2, "🔥 Target 2", colT2, true)
         f_level(upT3, "🏹 Target 3", colT3, true)
         f_level(upT4, "👿 Target 4", colT4, true)
-
     if showDnTgts
         f_level(dnT1, "😇 Target 1", colT1, true)
         f_level(dnT2, "🔥 Target 2", colT2, true)
         f_level(dnT3, "🏹 Target 3", colT3, true)
         f_level(dnT4, "👿 Target 4", colT4, true)
 
-// Data Window
-plot(enableLevels and showDecider ? decHi : na, "Decider High", color=colDecider, display=display.data_window)
-plot(enableLevels and showDecider ? decLo : na, "Decider Low",  color=colDecider, display=display.data_window)
 plot(enableLevels ? C : na, "Centre C", color=colCenter, display=display.data_window)
 plot(enableLevels ? B : na, "Base B",   color=colCenter, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT1 : na, "Up Target 1", color=colT1, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT2 : na, "Up Target 2", color=colT2, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT3 : na, "Up Target 3", color=colT3, display=display.data_window)
-plot(enableLevels and showUpTgts ? upT4 : na, "Up Target 4", color=colT4, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT1 : na, "Dn Target 1", color=colT1, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT2 : na, "Dn Target 2", color=colT2, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT3 : na, "Dn Target 3", color=colT3, display=display.data_window)
-plot(enableLevels and showDnTgts ? dnT4 : na, "Dn Target 4", color=colT4, display=display.data_window)
+plot(enableLevels and showDecider ? decHi : na, "Decider High", color=colDecider, display=display.data_window)
+plot(enableLevels and showDecider ? decLo : na, "Decider Low",  color=colDecider, display=display.data_window)
+plot(enableLevels and showUpTgts ? upT1 : na, "Up T1", color=colT1, display=display.data_window)
+plot(enableLevels and showUpTgts ? upT2 : na, "Up T2", color=colT2, display=display.data_window)
+plot(enableLevels and showUpTgts ? upT3 : na, "Up T3", color=colT3, display=display.data_window)
+plot(enableLevels and showUpTgts ? upT4 : na, "Up T4", color=colT4, display=display.data_window)
+plot(enableLevels and showDnTgts ? dnT1 : na, "Dn T1", color=colT1, display=display.data_window)
+plot(enableLevels and showDnTgts ? dnT2 : na, "Dn T2", color=colT2, display=display.data_window)
+plot(enableLevels and showDnTgts ? dnT3 : na, "Dn T3", color=colT3, display=display.data_window)
+plot(enableLevels and showDnTgts ? dnT4 : na, "Dn T4", color=colT4, display=display.data_window)
 
-// Status chip (fixed: timeframe.period, not syminfo.period)
-var table info = table.new(position.top_right, 1, 1, bgcolor=color.new(color.black, 80), border_width=0)
+var table info = table.new(position.top_right, 1, 2, bgcolor=color.new(color.black, 80), border_width=0)
 if barstate.islast
+    string segShort = isIndian ? "INDIAN" : "ROBOT"
     string tfTxt = hybrid5m ? "5m Hybrid" : timeframe.period
-    string modeTxt = tfTxt + " | Len " + str.tostring(lengthIn) + " | " + winMode
-    table.cell(info, 0, 0, modeTxt, text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 0, segShort + " | Len " + str.tostring(lengthIn) + " | " + tfTxt, text_color=color.white, text_size=size.small)
+    string cbTxt = na(C) ? "Waiting snapshot…" : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick) + "  FROZEN")
+    table.cell(info, 0, 1, cbTxt, text_color=color.yellow, text_size=size.small)
