@@ -27,7 +27,7 @@ anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = g
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
 grpRobot = "Robot Prediction"
-robotMode = input.string("Auto (OR if Ext<60 / Last if Ext>=60)", "Robot Window", options = ["Auto (OR if Ext<60 / Last if Ext>=60)", "Last Ext bars", "First Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot)
+robotMode = input.string("Auto OR-Last", "Robot Window", options = ["Auto OR-Last", "Last Ext bars", "First Ext bars", "Offset Ext to 2Ext"], group = grpRobot, tooltip = "Auto OR-Last: Ext<60 = opening range 930-1005; Ext>=60 = last N bars.")
 robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot)
 robotOrSkipMins = input.int(15, "OR Skip Open (mins)", minval = 0, maxval = 60, group = grpRobot, tooltip = "Ext50 OR starts Start+Skip. 15 => 09:30–10:05 for Ext50 (skips L~40 open crash).")
 robotLagManual = input.int(0, "Manual Lag (Last mode)", minval = 0, maxval = 500, group = grpRobot)
@@ -232,7 +232,7 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
     int y0 = year(time, tz)
     int maxScan = math.min(bar_index, 5000)
 
-    if mode == "Auto (OR if Ext<60 / Last if Ext>=60)" and len >= 60
+    if mode == "Auto OR-Last" and len >= 60
         branch := "last"
         usedLag := 0
         [hsA, lsA, cA, fA, tA] = f_collect_last(len, startHhmm, 0, hSrc, lSrc, d0, m0, y0, maxScan)
@@ -242,8 +242,8 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
         cnt := cA
         iFrom := fA
         iTo := tA
-    else if mode == "Auto (OR if Ext<60 / Last if Ext>=60)"
-        // Clock OR: [Start+Skip, Start+Extend) — Ext50 => 930-1005 (int math)
+    else if mode == "Auto OR-Last"
+        // Clock OR: Start+Skip .. Start+Extend — Ext50 => 930-1005 (int math)
         int orStart = f_add_mins(startHhmm, orSkip)
         int orEnd = f_add_mins(startHhmm, len)
         branch := "or" + str.tostring(orStart) + "-" + str.tostring(orEnd)
@@ -265,7 +265,7 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
         cnt := cC
         iFrom := fC
         iTo := tC
-    else if mode == "Offset [Ext, 2Ext)"
+    else if mode == "Offset Ext to 2Ext"
         branch := "offset"
         usedLag := len
         float[] hsO = array.new_float()
