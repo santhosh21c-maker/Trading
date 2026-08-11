@@ -185,7 +185,7 @@ if isIntra and usePriorDay and not na(pdh) and not na(pdl) and not na(rawH) and 
 liveC = (rawH + rawL) / 2.0
 liveB = math.max((rawH - rawL) / 2.0, atrFloor)
 
-// Freeze intraday once OR complete; Prediction stays live
+// Freeze intraday once when OR first completes; Prediction stays live
 var float frC = na
 var float frB = na
 var float frH = na
@@ -193,9 +193,7 @@ var float frL = na
 var int frDay = na
 var string frSeg = "INIT"
 
-needSnap = isIntra and orDone and barstate.islast and not na(liveC) and liveB > 0
-segChanged = segment != frSeg or sessDay != frDay
-if needSnap and (segChanged or na(frC))
+if isIntra and orDone and not na(liveC) and liveB > 0 and (na(frC) or frDay != sessDay or frSeg != segment)
     frC := liveC
     frB := liveB
     frH := rawH
@@ -203,10 +201,11 @@ if needSnap and (segChanged or na(frC))
     frDay := sessDay
     frSeg := segment
 
-C = isIntra ? frC : liveC
-B = isIntra ? frB : liveB
-dispH = isIntra ? frH : rawH
-dispL = isIntra ? frL : rawL
+// During OR build: show live developing range. After OR: frozen snapshot.
+C = isIntra ? (orDone and not na(frC) ? frC : liveC) : liveC
+B = isIntra ? (orDone and not na(frB) ? frB : liveB) : liveB
+dispH = isIntra ? (orDone and not na(frH) ? frH : rawH) : rawH
+dispL = isIntra ? (orDone and not na(frL) ? frL : rawL) : rawL
 
 ready = enableLevels and not na(C) and not na(B) and B > 0
 
