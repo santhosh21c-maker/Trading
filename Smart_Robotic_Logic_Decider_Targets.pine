@@ -25,6 +25,7 @@ hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, toolti
 
 grpRobot = "Robot Prediction"
 robotStartHhmm = input.int(1000, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "Ignore bars before this time (avoids open crash lows).")
+robotWinWidth = input.int(30, "Robot Window Width (bars)", minval = 5, maxval = 200, group = grpRobot, tooltip = "H/L from bars [Extend .. Extend+Width). Ext 50 => [50..79], Ext 60 => [60..89] — different sets so Decider must move.")
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
@@ -109,19 +110,17 @@ f_prior_day_hl() =>
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
 
-// ROBOT: NON-OVERLAPPING block bars [len, 2*len) ago — Ext50 and Ext60 are different sets.
-// No last-N fallback (that made 50 and 60 identical).
-f_robot_hl(int len, int startHhmm, string hSrc, string lSrc) =>
+// ROBOT: bars [Extend, Extend+Width) ago — Ext50=[50..79], Ext60=[60..89].
+// NOT last-N (nested → often identical H/L). No fallback to last-N.
+f_robot_hl(int len, int width, int startHhmm, string hSrc, string lSrc) =>
     float h = na
     float l = na
     int cnt = 0
-    int tFrom = na
-    int tTo = na
     int d0 = dayofmonth(time, tz)
     int m0 = month(time, tz)
     int y0 = year(time, tz)
     int iFrom = len
-    int iTo = 2 * len - 1
+    int iTo = len + width - 1
     if iFrom <= bar_index
         int iEnd = math.min(iTo, bar_index)
         for i = iFrom to iEnd
@@ -131,11 +130,9 @@ f_robot_hl(int len, int startHhmm, string hSrc, string lSrc) =>
                 h := na(h) ? bh : math.max(h, bh)
                 l := na(l) ? bl : math.min(l, bl)
                 cnt += 1
-                tFrom := na(tFrom) ? time[i] : math.min(tFrom, time[i])
-                tTo := na(tTo) ? time[i] : math.max(tTo, time[i])
-    [h, l, cnt, iFrom, iTo, tFrom, tTo]
+    [h, l, cnt, iFrom, iTo]
 
-[hRob, lRob, nRob, i0, i1, t0, t1] = f_robot_hl(extendIn, robotStartHhmm, robotHSource, robotLSource)
+[hRob, lRob, nRob, i0, i1] = f_robot_hl(extendIn, robotWinWidth, robotStartHhmm, robotHSource, robotLSource)
 
 rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
 rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
@@ -266,10 +263,10 @@ if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
     table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + (isRobot ? " | LIVE levels" : " | FROZEN levels"), text_color = color.white, text_size = size.small)
     if isRobot
-        winTxt = "bars[" + str.tostring(i0) + ".." + str.tostring(i1) + "] n=" + str.tostring(nRob) + " >=" + str.tostring(robotStartHhmm)
+        winTxt = "offset bars[" + str.tostring(i0) + ".." + str.tostring(i1) + "] n=" + str.tostring(nRob) + " >=" + str.tostring(robotStartHhmm)
         table.cell(info, 0, 1, winTxt, text_color = color.aqua, text_size = size.small)
-        // Prove old last-N bug: if true, last50 and last60 H/L identical
-        table.cell(info, 0, 2, lastNsame ? "NOTE: last50==last60 (old bug)" : "last50!=last60 OK", text_color = lastNsame ? color.red : color.green, text_size = size.tiny)
+        // If red: last-N would NOT move Ext50↔60 (explains prior bug)
+        table.cell(info, 0, 2, lastNsame ? "Why old failed: last50 H/L == last60" : "last50 H/L != last60", text_color = lastNsame ? color.red : color.green, text_size = size.tiny)
     else
         table.cell(info, 0, 1, "prior-day | Ext=line length only", text_color = color.aqua, text_size = size.small)
         table.cell(info, 0, 2, "", text_color = color.gray, text_size = size.tiny)
