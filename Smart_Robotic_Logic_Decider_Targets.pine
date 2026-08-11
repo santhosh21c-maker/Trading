@@ -23,7 +23,7 @@ enableLevels = input.bool(true, "Enable Automated Levels", group = grpRobot)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpRobot)
 lengthIn = input.int(50, "Extend => Length", minval = 2, maxval = 500, group = grpRobot)
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpRobot)
-hybrid5m = input.bool(true, "Hybrid (Force 5 Min Values)", group = grpRobot, tooltip = "INDIAN uses 5m for H/L. Robot uses 1m chart bars for Length (matches vendor).")
+hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpRobot)
 winMode = input.string("Current", "Window Mode", options = ["Current", "Future"], group = grpRobot)
 
 grpSnap = "Snapshot / Freeze"
@@ -76,18 +76,23 @@ f_hl_indian(int len) =>
             cnt += 1
     [h, l]
 
-// ROBOT: last Length bars on CHART TF inside NSE RTH (skips gap candle if len < bars since open)
+// ROBOT: last Length bars on chart TF, today only, NSE hours 09:15-15:30
 f_hl_robot(int len, string mode) =>
     float h = na
     float l = na
     int cnt = 0
+    int d0 = dayofmonth(time)
+    int m0 = month(time)
+    int y0 = year(time)
     int startI = mode == "Future" ? 0 : 1
     int maxScan = math.min(bar_index, 5000)
     for i = startI to maxScan
         if cnt >= len
             break
-        bool inRth = not na(time("1", "0915-1530", time[i]))
-        if inRth
+        bool sameDay = dayofmonth(time[i]) == d0 and month(time[i]) == m0 and year(time[i]) == y0
+        int hhmm = hour(time[i], syminfo.timezone) * 100 + minute(time[i], syminfo.timezone)
+        bool inRth = hhmm >= 915 and hhmm <= 1530
+        if sameDay and inRth
             h := na(h) ? high[i] : math.max(h, high[i])
             l := na(l) ? low[i] : math.min(l, low[i])
             cnt += 1
