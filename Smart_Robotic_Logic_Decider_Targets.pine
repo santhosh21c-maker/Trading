@@ -204,12 +204,23 @@ if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
         f_level(dnT3, "Target 3", clrT3, true)
         f_level(dnT4, "Target 4", clrT4, true)
 
+// Seed plot so Pine accepts the script (drawings alone can fail this check)
+plot(close, title = "seed", display = display.none)
+
 plot(enableLevels ? frozenH : na, "Window High", display = display.data_window)
 plot(enableLevels ? frozenL : na, "Window Low", display = display.data_window)
 plot(enableLevels ? C : na, "Centre C", color = clrCenter, display = display.data_window)
 plot(enableLevels ? B : na, "Base B", color = clrCenter, display = display.data_window)
 plot(enableLevels and showDecider ? decHi : na, "Decider High", color = clrDecider, display = display.data_window)
 plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = clrDecider, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT1 : na, "Up T1", color = clrT1, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT2 : na, "Up T2", color = clrT2, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT3 : na, "Up T3", color = clrT3, display = display.data_window)
+plot(enableLevels and showUpTgts ? upT4 : na, "Up T4", color = clrT4, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT1 : na, "Dn T1", color = clrT1, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT2 : na, "Dn T2", color = clrT2, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT3 : na, "Dn T3", color = clrT3, display = display.data_window)
+plot(enableLevels and showDnTgts ? dnT4 : na, "Dn T4", color = clrT4, display = display.data_window)
 
 var table info = table.new(position.top_right, 1, 4, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
