@@ -8,12 +8,10 @@
 //
 // SEGMENTS:
 //   INDIAN -> last Length bars from PRIOR days (5m if Hybrid)
-//   ROBOT  -> last Length bars from TODAY only on CHART TF (1m)
-//             Length ALWAYS applied (50 vs 60 must differ once enough today bars exist)
+//   ROBOT  -> FIRST Length bars of TODAY (from 09:15), then FROZEN
+//             Example PUT L50: bars 09:15-10:04 -> H~77.15 L~66.65 -> Dec 72.22/71.59
+//             (Last-N was wrong: at 11:00 it pulled the later dip to ~57)
 //
-// FIX: Robot no longer uses broken hour/RTH filter that made Length 50 and 60
-//      return the same H/L (too few bars counted). Stops at day boundary.
-
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpRobot = "Robot Targets"
@@ -23,6 +21,7 @@ lengthIn = input.int(50, "Extend => Length", minval = 2, maxval = 500, group = g
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpRobot)
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpRobot)
 winMode = input.string("Current", "Window Mode", options = ["Current", "Future"], group = grpRobot)
+robotWindow = input.string("First N bars of today", "Robot Window", options = ["First N bars of today", "Last N bars of today"], group = grpRobot)
 
 grpSnap = "Snapshot / Freeze"
 forceRecalc = input.bool(false, "Force Recalculate Now", group = grpSnap)
@@ -55,7 +54,23 @@ lineWidth = input.int(1, "Line Width", minval = 1, maxval = 3, group = grpStyle)
 isIndian = segment == "INDIAN - Index, Stock & Option"
 tz = "Asia/Kolkata"
 
-// INDIAN: walk backward across PRIOR days until Length bars collected
+f_same_day(int idx, int d0, int m0, int y0) =>
+    dayofmonth(time[idx], tz) == d0 and month(time[idx], tz) == m0 and year(time[idx], tz) == y0
+
+// Count how many bars belong to today (from current bar backward)
+f_today_count() =>
+    int d0 = dayofmonth(time, tz)
+    int m0 = month(time, tz)
+    int y0 = year(time, tz)
+    int cnt = 0
+    int maxScan = math.min(bar_index, 5000)
+    for i = 0 to maxScan
+        if not f_same_day(i, d0, m0, y0)
+            break
+        cnt += 1
+    cnt
+
+// INDIAN: prior days only, Length bars
 f_hl_indian(int len) =>
     float h = na
     float l = na
@@ -67,15 +82,15 @@ f_hl_indian(int len) =>
     for i = 1 to maxScan
         if cnt >= len
             break
-        bool priorDay = dayofmonth(time[i], tz) != d0 or month(time[i], tz) != m0 or year(time[i], tz) != y0
+        bool priorDay = not f_same_day(i, d0, m0, y0)
         if priorDay
             h := na(h) ? high[i] : math.max(h, high[i])
             l := na(l) ? low[i] : math.min(l, low[i])
             cnt += 1
     [h, l, cnt]
 
-// ROBOT: last Length bars of TODAY only (stop at day boundary — Length is applied)
-f_hl_robot(int len, string mode) =>
+// ROBOT last-N today (newest Length bars)
+f_hl_robot_last(int len, string mode) =>
     float h = na
     float l = na
     int cnt = 0
@@ -87,36 +102,48 @@ f_hl_robot(int len, string mode) =>
     for i = startI to maxScan
         if cnt >= len
             break
-        bool sameDay = dayofmonth(time[i], tz) == d0 and month(time[i], tz) == m0 and year(time[i], tz) == y0
-        if not sameDay
+        if not f_same_day(i, d0, m0, y0)
             break
         h := na(h) ? high[i] : math.max(h, high[i])
         l := na(l) ? low[i] : math.min(l, low[i])
         cnt += 1
     [h, l, cnt]
 
+// ROBOT first-N today (oldest Length bars from session open) — matches vendor freeze
+f_hl_robot_first(int len) =>
+    float h = na
+    float l = na
+    int todayCount = f_today_count()
+    int useN = math.min(len, todayCount)
+    // today indices: 0 = current, todayCount-1 = first bar of day (09:15)
+    // first useN session bars = indices [todayCount-useN , todayCount-1]
+    if useN > 0
+        int iFrom = todayCount - useN
+        int iTo = todayCount - 1
+        for i = iFrom to iTo
+            h := na(h) ? high[i] : math.max(h, high[i])
+            l := na(l) ? low[i] : math.min(l, low[i])
+    [h, l, useN]
+
 [hIndOwn, lIndOwn, nIndOwn] = f_hl_indian(lengthIn)
 [hInd5, lInd5, nInd5] = request.security(syminfo.tickerid, "5", f_hl_indian(lengthIn), lookahead = barmerge.lookahead_off)
-[hRob, lRob, nRob] = f_hl_robot(lengthIn, winMode)
+[hRobLast, lRobLast, nRobLast] = f_hl_robot_last(lengthIn, winMode)
+[hRobFirst, lRobFirst, nRobFirst] = f_hl_robot_first(lengthIn)
 
-// Also compute plain Length lookback (always Length-sensitive) as Robot fallback
-hiLen = ta.highest(high, lengthIn)
-loLen = ta.lowest(low, lengthIn)
-hiLenUse = winMode == "Future" ? hiLen : hiLen[1]
-loLenUse = winMode == "Future" ? loLen : loLen[1]
+useFirst = robotWindow == "First N bars of today"
+hRob = useFirst ? hRobFirst : hRobLast
+lRob = useFirst ? lRobFirst : lRobLast
+nRob = useFirst ? nRobFirst : nRobLast
 
-// Prefer today-only Robot window when it collected enough bars for Length.
-// If not enough today bars, fall back to plain last-Length (so Extend always moves levels).
-enoughToday = nRob >= lengthIn
-rawH = isIndian ? (hybrid5m ? hInd5 : hIndOwn) : (enoughToday ? hRob : hiLenUse)
-rawL = isIndian ? (hybrid5m ? lInd5 : lIndOwn) : (enoughToday ? lRob : loLenUse)
-barsUsed = isIndian ? (hybrid5m ? nInd5 : nIndOwn) : (enoughToday ? nRob : lengthIn)
-srcTxt = isIndian ? (hybrid5m ? "5m prior-day" : "chart prior-day") : (enoughToday ? "today last-N" : "chart last-N fallback")
+rawH = isIndian ? (hybrid5m ? hInd5 : hIndOwn) : hRob
+rawL = isIndian ? (hybrid5m ? lInd5 : lIndOwn) : lRob
+barsUsed = isIndian ? (hybrid5m ? nInd5 : nIndOwn) : nRob
+srcTxt = isIndian ? (hybrid5m ? "5m prior-day" : "chart prior-day") : (useFirst ? "today FIRST-N" : "today LAST-N")
 
 liveC = (rawH + rawL) / 2.0
 liveB = (rawH - rawL) / 2.0
 
-// ---- FREEZE: must refresh whenever Extend / Segment changes ----
+// Freeze when inputs change (Length/Segment/etc.)
 var float frozenC = na
 var float frozenB = na
 var float frozenH = na
@@ -127,13 +154,12 @@ var int frozenDate = -1
 var int frozenHyb = -1
 var int frozenForce = -1
 var int frozenBars = -1
+var string frozenWin = "INIT"
 
 hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
 
-inputsChanged = lengthIn != frozenLen or segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
-
-// Snapshot on last bar whenever inputs changed OR first run
+inputsChanged = lengthIn != frozenLen or segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce or robotWindow != frozenWin
 canSnap = enableLevels and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
 shouldSnapshot = canSnap and (inputsChanged or frozenLen == -1)
 
@@ -148,6 +174,7 @@ if shouldSnapshot
     frozenHyb := hybFlag
     frozenForce := forceFlag
     frozenBars := barsUsed
+    frozenWin := robotWindow
 
 C = frozenC
 B = frozenB
@@ -204,7 +231,7 @@ if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
         f_level(dnT3, "Target 3", clrT3, true)
         f_level(dnT4, "Target 4", clrT4, true)
 
-// Seed plot so Pine accepts the script (drawings alone can fail this check)
+bgcolor(color.new(color.black, 100))
 plot(close, title = "seed", display = display.none)
 
 plot(enableLevels ? frozenH : na, "Window High", display = display.data_window)
