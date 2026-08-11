@@ -2,14 +2,14 @@
 
 Educational Pine recreation of the PxTrading-style **Decider / Target** ladder.
 
-## Extend = line length only
+## Segment behaviour (locked)
 
-Under **Robot Prediction** (and Indian), **Extend** only lengthens horizontal Decider/Target lines.
+| Segment | What **Extend** does |
+|---------|----------------------|
+| **Robot Prediction** | Changes **Decider / Targets** (prediction lookback) **and** draws lines further right |
+| **INDIAN** | Levels **fixed for the day** (prior-day H/L). Extend **only** lengthens lines |
 
-- It does **not** change H / L / C / B / Decider / Targets
-- It does **not** plot a future price path
-
-## Ladder (verified)
+## Ladder
 
 ```text
 C = (H + L) / 2
@@ -18,24 +18,18 @@ Decider  = C ± 0.06·B
 Target N = C ± {1.00, 1.54, 1.83, 2.08}·B
 ```
 
-## H / L sources
+## Vendor Robot reference (PUT 24500)
 
-| Segment | H/L source | Extend |
-|---------|------------|--------|
-| **INDIAN** | Prior calendar day | Lines only |
-| **Robot Prediction** | **Opening Range** (default): Start HHMM + OR Minutes — *not* Extend — or Prior day | Lines only |
+| Extend | Decider | H / L / C / B (approx) |
+|--------|---------|-------------------------|
+| 50 | 72.22 / 71.59 | 77.15 / 66.65 / 71.91 / 5.25 |
+| 60 | 65.97 / 65.48 | 69.75 / 61.70 / 65.73 / 4.03 |
 
-## Vendor reference (Robot Prediction, 11 Aug 2026)
+Exact H/L bar selection is still approximate; behaviour above is the priority.
 
-| Contract | Extend (visual) | Decider | H / L / C / B |
-|----------|-----------------|---------|----------------|
-| CALL 24450 | 60 | 34.77 / 33.18 | 47.30 / 20.65 / 33.98 / 13.33 |
-| PUT 24450 | 50 | 13.5 / 12.9 | 18.15 / 8.25 / 13.20 / 4.95 |
+## Behaviour test
 
-## Test
-
-1. Paste script on 1m CE/PE  
-2. Segment = Robot Prediction  
-3. Change **Extend** 50 ↔ 60 → lines move, **C/B must stay the same**  
-4. Tune **OR Minutes** / Start (or switch to Prior day) until H/L match the table  
-5. Toggle Force Recalculate after recipe changes; send status-chip H/L/C/B  
+1. **Robot** + Extend 50 → note Decider  
+2. Extend **60** → Decider **must change**  
+3. Switch to **INDIAN** → note Decider  
+4. Change Extend → Decider **must stay the same**; only line length changes  

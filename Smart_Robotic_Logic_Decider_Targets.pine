@@ -1,34 +1,34 @@
 //@version=6
 // Smart Robotic Logic - Decider and Targets (Educational recreation)
 //
-// LADDER (verified):
+// LADDER:
 //   C = (H+L)/2 , B = (H-L)/2
 //   Decider = C +/- 0.06*B
 //   Targets = C +/- {1, 1.54, 1.83, 2.08}*B
 //
-// EXTEND (both segments):
-//   ONLY controls how far horizontal lines are drawn to the right.
-//   NEVER changes H, L, C, B, Decider, or Targets.
-//   NEVER plots a future price path.
+// SEGMENT BEHAVIOUR (confirmed by user):
+//   ROBOT PREDICTION:
+//     Extend = prediction lookback. Larger Extend => different H/L => Decider/Targets CHANGE.
+//     Lines are also drawn Extend bars to the right (horizontal only — no future price curve).
+//   INDIAN - Index, Stock & Option:
+//     Decider/Targets are FIXED for the day (prior-day H/L).
+//     Extend ONLY lengthens the lines; levels do NOT change.
 //
-// ROBOT H/L (independent of Extend):
-//   Default = Opening Range: today's bars from Start HHMM for OR Minutes.
-//   Frozen for the session once that window is known.
-//   Alternative = Prior calendar day.
+// Vendor Robot reference (PUT 24500) — values still approximate while we lock behaviour:
+//   Extend 50 => Decider ~72.22 / 71.59  (H~77.15 L~66.65)
+//   Extend 60 => Decider ~65.97 / 65.48  (H~69.75 L~61.70)
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
-extendBars = input.int(50, "Extend (bars) — lines only", minval = 1, maxval = 500, group = grpMain, tooltip = "Robot Prediction: ONLY lengthens horizontal lines. Does not change Decider/Targets. Does not plot future prices.")
+extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: changes Decider/Targets (lookback) AND line length. INDIAN: line length ONLY — levels stay fixed for the day.")
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpMain)
-hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "Applies to INDIAN prior-day H/L only.")
+hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN prior-day H/L on 5m. Robot uses chart TF (use 1m).")
 
-grpRobot = "Robot H/L (Extend does not affect this)"
-robotRange = input.string("Opening Range", "Robot Range Source", options = ["Opening Range", "Prior day"], group = grpRobot, tooltip = "H/L source for Robot Prediction. Not linked to Extend.")
-orStartHhmm = input.int(915, "OR Start HHMM (IST)", minval = 900, maxval = 1200, group = grpRobot)
-orMinutes = input.int(60, "OR Minutes", minval = 5, maxval = 180, group = grpRobot, tooltip = "Fixed morning window size. NOT the Extend value.")
+grpRobot = "Robot Prediction lookback"
+robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "Ignore bars before this time when building Robot H/L.")
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
 
@@ -61,18 +61,16 @@ clrCenter = input.color(color.new(#787B86, 0), "Centre", group = grpStyle)
 lineWidth = input.int(1, "Line Width", minval = 1, maxval = 3, group = grpStyle)
 
 isIndian = segment == "INDIAN - Index, Stock & Option"
+isRobot = not isIndian
 tz = "Asia/Kolkata"
-// VISUAL ONLY — never used in H/L/C/B math
-extendRight = extendBars + extraExtendRight
+// Line length always uses Extend (both segments)
+extendRight = extendIn + extraExtendRight
 
 f_hhmm(int idx) =>
     hour(time[idx], tz) * 100 + minute(time[idx], tz)
 
-f_hhmm_add(int hhmm, int mins) =>
-    int total = int(hhmm / 100) * 60 + (hhmm % 100) + mins
-    int eh = int(total / 60)
-    int em = total % 60
-    eh * 100 + em
+f_same_day(int idx, int d0, int m0, int y0) =>
+    dayofmonth(time[idx], tz) == d0 and month(time[idx], tz) == m0 and year(time[idx], tz) == y0
 
 f_pick_h(int idx, string src) =>
     src == "Close" ? close[idx] : src == "Body high" ? math.max(open[idx], close[idx]) : high[idx]
@@ -80,7 +78,7 @@ f_pick_h(int idx, string src) =>
 f_pick_l(int idx, string src) =>
     src == "Close" ? close[idx] : src == "Body low" ? math.min(open[idx], close[idx]) : low[idx]
 
-// INDIAN: prior calendar day — Extend never touches this
+// INDIAN: prior calendar day H/L — Extend must NOT feed this
 f_prior_day_hl() =>
     int d0 = dayofmonth(time, tz)
     int m0 = month(time, tz)
@@ -112,83 +110,41 @@ f_prior_day_hl() =>
                 break
     [h, l]
 
-f_prior_day_hl_src(string hSrc, string lSrc) =>
-    int d0 = dayofmonth(time, tz)
-    int m0 = month(time, tz)
-    int y0 = year(time, tz)
-    float h = na
-    float l = na
-    int cnt = 0
-    int maxScan = math.min(bar_index, 5000)
-    bool inPrior = false
-    int priorD = na
-    int priorM = na
-    int priorY = na
-    for i = 1 to maxScan
-        int di = dayofmonth(time[i], tz)
-        int mi = month(time[i], tz)
-        int yi = year(time[i], tz)
-        bool sameAsToday = di == d0 and mi == m0 and yi == y0
-        if not sameAsToday
-            if not inPrior
-                inPrior := true
-                priorD := di
-                priorM := mi
-                priorY := yi
-                h := f_pick_h(i, hSrc)
-                l := f_pick_l(i, lSrc)
-                cnt := 1
-            else if di == priorD and mi == priorM and yi == priorY
-                h := math.max(h, f_pick_h(i, hSrc))
-                l := math.min(l, f_pick_l(i, lSrc))
-                cnt += 1
-            else
-                break
-    [h, l, cnt]
-
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
 
-// ROBOT Opening Range — fixed clock window; Extend is NOT used here
-f_opening_range(int startHhmm, int mins, string hSrc, string lSrc) =>
-    int endHhmm = f_hhmm_add(startHhmm, mins)
-    int d0 = dayofmonth(time, tz)
-    int m0 = month(time, tz)
-    int y0 = year(time, tz)
+// ROBOT: last `Extend` valid bars (today, after Start) — Extend CHANGES H/L
+f_robot_hl(int len, int startHhmm, string hSrc, string lSrc) =>
     float h = na
     float l = na
     int cnt = 0
+    int d0 = dayofmonth(time, tz)
+    int m0 = month(time, tz)
+    int y0 = year(time, tz)
     int maxScan = math.min(bar_index, 5000)
-    for i = 0 to maxScan
-        int di = dayofmonth(time[i], tz)
-        int mi = month(time[i], tz)
-        int yi = year(time[i], tz)
-        if di == d0 and mi == m0 and yi == y0
-            int t = f_hhmm(i)
-            if t >= startHhmm and t < endHhmm
-                float bh = f_pick_h(i, hSrc)
-                float bl = f_pick_l(i, lSrc)
-                h := na(h) ? bh : math.max(h, bh)
-                l := na(l) ? bl : math.min(l, bl)
-                cnt += 1
-        else if i > 0
+    for i = 1 to maxScan
+        if cnt >= len
             break
-    [h, l, cnt, endHhmm]
+        if f_same_day(i, d0, m0, y0) and f_hhmm(i) >= startHhmm
+            float bh = f_pick_h(i, hSrc)
+            float bl = f_pick_l(i, lSrc)
+            h := na(h) ? bh : math.max(h, bh)
+            l := na(l) ? bl : math.min(l, bl)
+            cnt += 1
+        else if not f_same_day(i, d0, m0, y0)
+            break
+    [h, l, cnt]
 
-[hOr, lOr, nOr, orEnd] = f_opening_range(orStartHhmm, orMinutes, robotHSource, robotLSource)
-[hPrior, lPrior, nPrior] = f_prior_day_hl_src(robotHSource, robotLSource)
+[hRob, lRob, nRob] = f_robot_hl(extendIn, robotStartHhmm, robotHSource, robotLSource)
 
-useOr = robotRange == "Opening Range"
-rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : (useOr ? hOr : hPrior)
-rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : (useOr ? lOr : lPrior)
-rawN = isIndian ? 0 : (useOr ? nOr : nPrior)
+rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
+rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
 
-srcTxt = isIndian ? "INDIAN prior-day | Extend=LINES ONLY" : (useOr ? ("ROBOT OR " + str.tostring(orStartHhmm) + "-" + str.tostring(orEnd) + " H=" + robotHSource + " L=" + robotLSource + " n=" + str.tostring(nOr) + " | Extend=LINES ONLY") : ("ROBOT prior-day H=" + robotHSource + " L=" + robotLSource + " n=" + str.tostring(nPrior) + " | Extend=LINES ONLY"))
+srcTxt = isIndian ? "INDIAN prior-day FIXED | Extend=lines only" : ("ROBOT last " + str.tostring(extendIn) + " bars | H/L CHANGE with Extend | n=" + str.tostring(nRob))
 
 liveC = (rawH + rawL) / 2.0
 liveB = (rawH - rawL) / 2.0
 
-// Freeze C/B on recipe inputs — NEVER on Extend
 var float frozenC = na
 var float frozenB = na
 var float frozenH = na
@@ -197,16 +153,21 @@ var string frozenSeg = "INIT"
 var int frozenDate = -1
 var int frozenHyb = -1
 var int frozenForce = -1
-var string frozenRange = "INIT"
-var int frozenOrStart = -1
-var int frozenOrMins = -1
+var int frozenExt = -1
+var int frozenStart = -1
 var string frozenHS = "INIT"
 var string frozenLS = "INIT"
 var int frozenN = -1
 
 hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
-recipeChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce or robotRange != frozenRange or orStartHhmm != frozenOrStart or orMinutes != frozenOrMins or robotHSource != frozenHS or robotLSource != frozenLS
+
+// INDIAN: do NOT resnapshot when Extend changes (levels fixed for the day)
+// ROBOT: DO resnapshot when Extend changes (prediction lookback)
+indianRecipeChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
+robotRecipeChanged = indianRecipeChanged or extendIn != frozenExt or robotStartHhmm != frozenStart or robotHSource != frozenHS or robotLSource != frozenLS
+recipeChanged = isIndian ? indianRecipeChanged : robotRecipeChanged
+
 canSnap = enableLevels and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
 shouldSnapshot = canSnap and (recipeChanged or na(frozenC))
 
@@ -219,12 +180,11 @@ if shouldSnapshot
     frozenDate := anchorDate
     frozenHyb := hybFlag
     frozenForce := forceFlag
-    frozenRange := robotRange
-    frozenOrStart := orStartHhmm
-    frozenOrMins := orMinutes
+    frozenExt := extendIn
+    frozenStart := robotStartHhmm
     frozenHS := robotHSource
     frozenLS := robotLSource
-    frozenN := rawN
+    frozenN := isRobot ? nRob : 0
 
 C = frozenC
 B = frozenB
@@ -292,7 +252,8 @@ plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = clrDecide
 var table info = table.new(position.top_right, 1, 4, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
-    table.cell(info, 0, 0, segShort + " | Extend " + str.tostring(extendRight) + " = LINE LENGTH ONLY", text_color = color.white, text_size = size.small)
+    extNote = isIndian ? "Extend=LINES ONLY (levels fixed)" : "Extend=LOOKBACK (levels CHANGE)"
+    table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + " | " + extNote, text_color = color.white, text_size = size.small)
     table.cell(info, 0, 1, srcTxt, text_color = color.aqua, text_size = size.small)
     hlTxt = na(frozenH) ? "..." : ("H " + str.tostring(frozenH, format.mintick) + "  L " + str.tostring(frozenL, format.mintick) + "  n=" + str.tostring(frozenN))
     table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)
