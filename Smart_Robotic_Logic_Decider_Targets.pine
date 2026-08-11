@@ -10,31 +10,32 @@
 //   ROBOT: Extend changes levels. Lines = fixed short length.
 //   INDIAN: prior-day FROZEN. Extend = line length only.
 //
-// Latest chips (auto-lag) — CONVERGING, not thrashing:
-//   Ext50: Dec 69.70/68.90  H75.60 L63.00  aim 72.22 (H trimmed too much, window late)
-//   Ext60: Dec 65.10/64.45  H70.10 L59.45  aim 65.97 ← VERY CLOSE (lift L ~2)
+// Checked chips (OR/Last build):
+//   Ext50: or 915-1004 H79.25 L40.00 Dec60.80  ← open crash L=40 (skip open)
+//   Ext60: last 1006-1105 H73.00 L59.55 Dec66.70 ← need H~70 L~62 (was closer when high also trimmed)
 //
-// AUTO (this build):
-//   Ext < 60  => Opening Range = first Ext bars after Start (session-anchored)
-//                keeps H~77, ends before mid-morning dump when Start=915 Ext=50
-//   Ext >= 60 => Last Ext bars (recent) + low-only trim
+// This build:
+//   Ext50 OR = clock window [Start+SkipOpen .. Start+Extend)  e.g. 930-1005
+//   Ext60 Last = trimHigh 10% + trimLow 20%
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
-extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: Ext<60 = opening-range size; Ext>=60 = recent lookback. INDIAN: line length only.")
+extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: Ext<60 = OR end = Start+Extend; Ext>=60 = last-N length. INDIAN: line length only.")
 anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpMain)
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
 grpRobot = "Robot Prediction"
-robotMode = input.string("Auto (OR if Ext<60 / Last if Ext>=60)", "Robot Window", options = ["Auto (OR if Ext<60 / Last if Ext>=60)", "Last Ext bars", "First Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot, tooltip = "Auto: Ext50 uses first 50 mins of session (H77/L66); Ext60 uses last 60 bars (recent).")
+robotMode = input.string("Auto (OR if Ext<60 / Last if Ext>=60)", "Robot Window", options = ["Auto (OR if Ext<60 / Last if Ext>=60)", "Last Ext bars", "First Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot)
 robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot)
+robotOrSkipMins = input.int(15, "OR Skip Open (mins)", minval = 0, maxval = 60, group = grpRobot, tooltip = "Ext50 OR starts Start+Skip. 15 => 09:30–10:05 for Ext50 (skips L~40 open crash).")
 robotLagManual = input.int(0, "Manual Lag (Last mode)", minval = 0, maxval = 500, group = grpRobot)
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
-robotTrimLowPct = input.float(15.0, "Trim lows % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Only trims lows (never highs). Lifts Ext60 L 59→~62. Opening-range Ext50 uses 0.")
+robotTrimHighPct = input.float(10.0, "Trim highs % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Prior chip H73→~70 with ~10% high trim (aim H69.75).")
+robotTrimLowPct = input.float(20.0, "Trim lows % (Last/Ext60)", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Lift L 59→~62 toward aim L61.70.")
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
 robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
@@ -77,6 +78,10 @@ f_hhmm(int idx) =>
 f_same_day(int idx, int d0, int m0, int y0) =>
     dayofmonth(time[idx], tz) == d0 and month(time[idx], tz) == m0 and year(time[idx], tz) == y0
 
+f_add_mins(int hhmm, int mins) =>
+    int total = (hhmm / 100) * 60 + (hhmm % 100) + mins
+    (total / 60) * 100 + (total % 60)
+
 f_pick_h(int idx, string src) =>
     src == "Close" ? close[idx] : src == "Body high" ? math.max(open[idx], close[idx]) : high[idx]
 
@@ -117,22 +122,52 @@ f_prior_day_hl() =>
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
 
-// Trim lows only (never cut the high — Ext50 needs H~77 kept)
-f_trim_hl(float[] hs, float[] ls, float trimLowPct) =>
+f_trim_hl(float[] hs, float[] ls, float trimHighPct, float trimLowPct) =>
     float hOut = na
     float lOut = na
     int n = array.size(hs)
     if n > 0
-        hOut := array.max(hs)
-        if trimLowPct <= 0 or n < 5
+        if (trimHighPct <= 0 and trimLowPct <= 0) or n < 5
+            hOut := array.max(hs)
             lOut := array.min(ls)
         else
+            float[] hs2 = array.copy(hs)
             float[] ls2 = array.copy(ls)
+            array.sort(hs2, order.ascending)
             array.sort(ls2, order.ascending)
-            int drop = int(math.floor(n * trimLowPct / 100.0))
-            drop := math.min(drop, int(math.floor((n - 1) / 2)))
-            lOut := array.get(ls2, drop)
+            int dropH = trimHighPct <= 0 ? 0 : int(math.floor(n * trimHighPct / 100.0))
+            int dropL = trimLowPct <= 0 ? 0 : int(math.floor(n * trimLowPct / 100.0))
+            int maxDrop = int(math.floor((n - 1) / 2))
+            dropH := math.min(dropH, maxDrop)
+            dropL := math.min(dropL, maxDrop)
+            hOut := array.get(hs2, n - 1 - dropH)
+            lOut := array.get(ls2, dropL)
     [hOut, lOut]
+
+// Clock-anchored OR: [orStart, orEnd) e.g. Ext50 => 930-1005
+f_collect_or_clock(int orStart, int orEnd, string hSrc, string lSrc, int d0, int m0, int y0, int maxScan) =>
+    float[] hs = array.new_float()
+    float[] ls = array.new_float()
+    int cnt = 0
+    int iFrom = na
+    int iTo = na
+    int dayBars = 0
+    for i = 1 to maxScan
+        if f_same_day(i, d0, m0, y0)
+            dayBars += 1
+        else
+            break
+    if dayBars > 0
+        for i = dayBars to 1
+            int t = f_hhmm(i)
+            if t >= orStart and t < orEnd
+                array.push(hs, f_pick_h(i, hSrc))
+                array.push(ls, f_pick_l(i, lSrc))
+                cnt += 1
+                if cnt == 1
+                    iFrom := i
+                iTo := i
+    [hs, ls, cnt, iFrom, iTo]
 
 f_collect_first(int len, int startHhmm, string hSrc, string lSrc, int d0, int m0, int y0, int maxScan) =>
     float[] hs = array.new_float()
@@ -180,7 +215,7 @@ f_collect_last(int len, int startHhmm, int lag, string hSrc, string lSrc, int d0
             break
     [hs, ls, cnt, iFrom, iTo]
 
-f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc, int manualLag, float trimLowPct) =>
+f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string lSrc, int manualLag, float trimHighPct, float trimLowPct) =>
     float h = na
     float l = na
     int cnt = 0
@@ -197,18 +232,20 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc, int ma
         branch := "last"
         usedLag := 0
         [hsA, lsA, cA, fA, tA] = f_collect_last(len, startHhmm, 0, hSrc, lSrc, d0, m0, y0, maxScan)
-        [hA, lA] = f_trim_hl(hsA, lsA, trimLowPct)
+        [hA, lA] = f_trim_hl(hsA, lsA, trimHighPct, trimLowPct)
         h := hA
         l := lA
         cnt := cA
         iFrom := fA
         iTo := tA
     else if mode == "Auto (OR if Ext<60 / Last if Ext>=60)"
-        // Opening range for Ext50 — no low trim (keep raw OR H/L)
+        // Clock OR: [Start+Skip, Start+Extend) — Ext50 => 930-1005
         branch := "or"
         usedLag := 0
-        [hsB, lsB, cB, fB, tB] = f_collect_first(len, startHhmm, hSrc, lSrc, d0, m0, y0, maxScan)
-        [hB, lB] = f_trim_hl(hsB, lsB, 0.0)
+        int orStart = f_add_mins(startHhmm, orSkip)
+        int orEnd = f_add_mins(startHhmm, len)
+        [hsB, lsB, cB, fB, tB] = f_collect_or_clock(orStart, orEnd, hSrc, lSrc, d0, m0, y0, maxScan)
+        [hB, lB] = f_trim_hl(hsB, lsB, 0.0, 0.0)
         h := hB
         l := lB
         cnt := cB
@@ -218,7 +255,7 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc, int ma
         branch := "last"
         usedLag := manualLag
         [hsC, lsC, cC, fC, tC] = f_collect_last(len, startHhmm, manualLag, hSrc, lSrc, d0, m0, y0, maxScan)
-        [hC, lC] = f_trim_hl(hsC, lsC, trimLowPct)
+        [hC, lC] = f_trim_hl(hsC, lsC, trimHighPct, trimLowPct)
         h := hC
         l := lC
         cnt := cC
@@ -242,14 +279,14 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc, int ma
                         iTo := i
                     if na(iFrom) or i > iFrom
                         iFrom := i
-        [hO, lO] = f_trim_hl(hsO, lsO, trimLowPct)
+        [hO, lO] = f_trim_hl(hsO, lsO, trimHighPct, trimLowPct)
         h := hO
         l := lO
     else
         branch := "first"
         usedLag := 0
         [hsD, lsD, cD, fD, tD] = f_collect_first(len, startHhmm, hSrc, lSrc, d0, m0, y0, maxScan)
-        [hD, lD] = f_trim_hl(hsD, lsD, 0.0)
+        [hD, lD] = f_trim_hl(hsD, lsD, 0.0, 0.0)
         h := hD
         l := lD
         cnt := cD
@@ -257,7 +294,7 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc, int ma
         iTo := tD
     [h, l, cnt, iFrom, iTo, usedLag, branch]
 
-[hRob, lRob, nRob, i0, i1, lagUsed, winBranch] = f_robot_hl(extendIn, robotStartHhmm, robotMode, robotHSource, robotLSource, robotLagManual, robotTrimLowPct)
+[hRob, lRob, nRob, i0, i1, lagUsed, winBranch] = f_robot_hl(extendIn, robotStartHhmm, robotOrSkipMins, robotMode, robotHSource, robotLSource, robotLagManual, robotTrimHighPct, robotTrimLowPct)
 
 rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
 rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
