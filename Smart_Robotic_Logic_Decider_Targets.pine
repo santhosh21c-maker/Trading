@@ -14,10 +14,10 @@
 //   Ext 50 => Dec 72.22/71.59  H~77.15 L~66.65
 //   Ext 60 => Dec 65.97/65.48  H~69.75 L~61.70
 //
-// Latest user chips (offset + Start 915):
-//   Ext50: H79.25 L59.10 Dec69.80/68.55  (closer)
-//   Ext60: H79.25 L29.00 Dec55.65/52.60  (open crash in [60..119])
-// Default now: First Ext bars after 10:00 — skips open L~29.
+// Latest user chips (first + Start 1000) — BEHAVIOUR OK (50≠60):
+//   Ext50: H71.40 L58.15 Dec65.15/64.40 aim72.22/71.59  (need earlier H~77)
+//   Ext60: H71.40 L57.60 Dec64.90/64.10 aim65.97/65.48  (CLOSE — tighten L)
+// Start 945 to reach morning H~77; Body low to lift L off wicks.
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
@@ -29,10 +29,10 @@ anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = g
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
 grpRobot = "Robot Prediction"
-robotMode = input.string("First Ext bars", "Robot Window", options = ["First Ext bars", "Last Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot, tooltip = "First Ext after Start: Ext50=10:00-10:49, Ext60=10:00-10:59. Avoids open L~29 that wrecked Offset Ext60.")
-robotStartHhmm = input.int(1000, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "1000 skips open crash. Use 915 only with care.")
+robotMode = input.string("First Ext bars", "Robot Window", options = ["First Ext bars", "Last Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot, tooltip = "First Ext after Start. Ext50/Ext60 share start but Ext60 adds 10 more bars so L/H can change.")
+robotStartHhmm = input.int(945, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "945 aims to catch H~77 for Ext50 while skipping worst open L~29. Try 930/1000 if needed.")
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
-robotLSource = input.string("Low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
+robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot, tooltip = "Body low lifts L off wicks (57→~61) to tighten Decider toward vendor Ext60.")
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
 robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
