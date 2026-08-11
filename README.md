@@ -6,7 +6,7 @@ Educational Pine recreation of PxTrading **Decider / Target** ladder.
 
 | Segment | Changing **Extend** does |
 |---------|---------------------------|
-| **Robot Prediction** | Changes **Decider / Target price levels** (LIVE lookback). Does **not** lengthen lines. |
+| **Robot Prediction** | Changes **Decider / Target price levels** (LIVE). Does **not** lengthen lines. |
 | **INDIAN** | Levels **fixed** for the day. Extend **only** lengthens lines. |
 
 ## Ladder (exact on vendor numbers)
@@ -18,21 +18,27 @@ Decider  = C ± 0.06·B
 Target N = C ± {1.00, 1.54, 1.83, 2.08}·B
 ```
 
-## Vendor Robot PUT 24500 — important
+## Vendor Robot PUT 24500 (same clock time ≈11:00, price ≈61.70)
 
-| Extend | Decider | H / L / C / B | Replay time to test |
-|--------|---------|----------------|---------------------|
-| 50 | 72.22 / 71.59 | 77.15 / 66.65 / 71.91 / 5.25 | **~10:10–10:20** |
-| 60 | 65.97 / 65.48 | 69.75 / 61.70 / 65.73 / 4.03 | **~11:30–11:40** |
+| Extend | Decider | H / L / C / B |
+|--------|---------|----------------|
+| 50 | 72.22 / 71.59 | 77.15 / 66.65 / 71.91 / 5.25 |
+| 60 | 65.97 / 65.48 | 69.75 / 61.70 / 65.73 / 4.03 |
 
-Vendor Ext50 has **H=77** but Ext60 has **H≈70**. At one clock time, nested first/last-N windows **cannot** produce H50 > H60 (longer window always keeps the higher high). Those two vendor chips are almost certainly from **different replay times**: early (77 still in last-50, dump not yet in window) vs later (77 aged out, bounce range).
+**H50 > H60 at one time** ⇒ nested last/first-N is impossible. Default window = **Auto lag**:
 
-Default Robot window = **Last Ext bars** (LIVE rolling lookback) + Body low.
+```text
+lag = max(0, 5 * (60 - Extend))
+Ext50 → lag 50 → bars [50..99]  (older morning, before deep dump)
+Ext60 → lag  0 → bars [1..60]   (recent)
+```
 
-## Test protocol
+Trim extremes default **10%** (lifts Ext60 L off crash bars).
 
-1. Paste script, Segment = Robot Prediction, Window = Last Ext bars, reset inputs.
-2. Replay PUT 24500 to **~10:15**, set Extend **50** → Decider should near **72.22 / 71.59** (chip H~77, L~66).
-3. Continue replay to **~11:35**, set Extend **60** → Decider should near **65.97 / 65.48** (chip H~70, L~62).
-4. Indian → change Ext → Decider unchanged; lines longer/shorter.
-5. Send both chips (include the `HHMM-HHMM` window span).
+## Test protocol (same replay time)
+
+1. Paste script, reset inputs, Robot Window = Auto lag.
+2. Replay PUT 24500 to **~11:00** (price near 61–62).
+3. Ext **50** → chip should near H77.15 L66.65 / Dec 72.22/71.59.
+4. Ext **60** → chip should near H69.75 L61.70 / Dec 65.97/65.48.
+5. Send both chips (`alag n=… lag=… HHMM-HHMM`).
