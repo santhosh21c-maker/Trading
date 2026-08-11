@@ -7,17 +7,16 @@
 //   Targets = C +/- {1, 1.54, 1.83, 2.08}*B
 //
 // BEHAVIOUR:
-//   ROBOT: Extend changes levels (LIVE). Lines = fixed short length.
+//   ROBOT: Extend = LIVE lookback size (Last Ext bars). Lines = fixed short length.
 //   INDIAN: prior-day FROZEN. Extend = line length only.
 //
-// Vendor aim PUT 24500:
-//   Ext 50 => Dec 72.22/71.59  H~77.15 L~66.65
-//   Ext 60 => Dec 65.97/65.48  H~69.75 L~61.70
+// Vendor PUT 24500 aims (likely DIFFERENT replay times — H50>H60 cannot be
+// nested first/last-N at the SAME clock time):
+//   ~10:10–10:20  Ext 50 => Dec 72.22/71.59  H~77.15 L~66.65
+//   ~11:30–11:40  Ext 60 => Dec 65.97/65.48  H~69.75 L~61.70
 //
-// Latest user chips (first + Start 1000) — BEHAVIOUR OK (50≠60):
-//   Ext50: H71.40 L58.15 Dec65.15/64.40 aim72.22/71.59  (need earlier H~77)
-//   Ext60: H71.40 L57.60 Dec64.90/64.10 aim65.97/65.48  (CLOSE — tighten L)
-// Start 945 to reach morning H~77; Body low to lift L off wicks.
+// User chips First+945 @ ~11:xx: H77.15 OK for Ext50, but L~59 includes dump;
+// Ext60 still had H77 (nested) so Dec stayed ~68 not ~66.
 //
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
@@ -29,10 +28,10 @@ anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = g
 hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
 
 grpRobot = "Robot Prediction"
-robotMode = input.string("First Ext bars", "Robot Window", options = ["First Ext bars", "Last Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot, tooltip = "First Ext after Start. Ext50/Ext60 share start but Ext60 adds 10 more bars so L/H can change.")
-robotStartHhmm = input.int(945, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "945 aims to catch H~77 for Ext50 while skipping worst open L~29. Try 930/1000 if needed.")
+robotMode = input.string("Last Ext bars", "Robot Window", options = ["Last Ext bars", "First Ext bars", "Offset [Ext, 2Ext)"], group = grpRobot, tooltip = "Last Ext = LIVE rolling lookback (recommended). Vendor Ext50 vs Ext60 aims need different replay times because H50>H60.")
+robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot, tooltip = "Ignore bars before this time. 915 = full session; 945 skips worst open.")
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
-robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot, tooltip = "Body low lifts L off wicks (57→~61) to tighten Decider toward vendor Ext60.")
+robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot, tooltip = "Body low lifts L off wicks toward vendor.")
 robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
 robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
 
@@ -127,8 +126,9 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc) =>
     int maxScan = math.min(bar_index, 5000)
 
     if mode == "Last Ext bars"
+        // LIVE rolling lookback: most recent `len` session bars after Start
         iFrom := 1
-        iTo := len
+        iTo := 1
         for i = 1 to maxScan
             if cnt >= len
                 break
@@ -136,6 +136,9 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc) =>
                 h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
                 l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
                 cnt += 1
+                if cnt == 1
+                    iTo := i
+                iFrom := i
             else if not f_same_day(i, d0, m0, y0)
                 break
     else if mode == "Offset [Ext, 2Ext)"
@@ -148,7 +151,11 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc) =>
                     h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
                     l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
                     cnt += 1
-        // If open-filter left window thin, grow toward NOW (never older / into open)
+                    if na(iTo) or i < iTo
+                        iTo := i
+                    if na(iFrom) or i > iFrom
+                        iFrom := i
+        // Grow toward NOW only (never older / into open)
         if cnt < math.max(10, int(len * 0.5))
             for i = len - 1 to 1
                 if cnt >= len
@@ -157,11 +164,11 @@ f_robot_hl(int len, int startHhmm, string mode, string hSrc, string lSrc) =>
                     h := na(h) ? f_pick_h(i, hSrc) : math.max(h, f_pick_h(i, hSrc))
                     l := na(l) ? f_pick_l(i, lSrc) : math.min(l, f_pick_l(i, lSrc))
                     cnt += 1
-                    iFrom := i
+                    iTo := i
                 else if not f_same_day(i, d0, m0, y0)
                     break
     else
-        // First Ext bars after Start (default) — oldest qualifying bars today
+        // First Ext bars after Start — oldest qualifying bars today
         int dayBars = 0
         for i = 1 to maxScan
             if f_same_day(i, d0, m0, y0)
@@ -279,15 +286,21 @@ plot(enableLevels ? B : na, "Base B", color = clrCenter, display = display.data_
 plot(enableLevels and showDecider ? decHi : na, "Decider High", color = clrDecider, display = display.data_window)
 plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = clrDecider, display = display.data_window)
 
-var table info = table.new(position.top_right, 1, 5, bgcolor = color.new(color.black, 80), border_width = 0)
+var table info = table.new(position.top_right, 1, 6, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
     table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + (isRobot ? " | LIVE" : " | FROZEN"), text_color = color.white, text_size = size.small)
     if isRobot
         modeTag = robotMode == "Last Ext bars" ? "last" : robotMode == "Offset [Ext, 2Ext)" ? "offset" : "first"
-        table.cell(info, 0, 1, modeTag + " n=" + str.tostring(nRob) + " >=" + str.tostring(robotStartHhmm) + " idx " + str.tostring(i0) + ".." + str.tostring(i1), text_color = color.aqua, text_size = size.small)
+        t0 = na(i0) ? "—" : str.tostring(f_hhmm(i0))
+        t1 = na(i1) ? "—" : str.tostring(f_hhmm(i1))
+        // i0 = older edge, i1 = newer edge for Last/First; show clock span
+        table.cell(info, 0, 1, modeTag + " n=" + str.tostring(nRob) + " >=" + str.tostring(robotStartHhmm) + " " + t0 + "-" + t1, text_color = color.aqua, text_size = size.small)
+        tip = extendIn == 50 ? "test @~10:15 aim72.22" : extendIn == 60 ? "test @~11:35 aim65.97" : ""
+        table.cell(info, 0, 5, tip, text_color = color.gray, text_size = size.tiny)
     else
         table.cell(info, 0, 1, "prior-day | Ext=line length", text_color = color.aqua, text_size = size.small)
+        table.cell(info, 0, 5, "", text_color = color.gray, text_size = size.tiny)
     hlTxt = na(dispH) ? "Waiting..." : ("H " + str.tostring(dispH, format.mintick) + "  L " + str.tostring(dispL, format.mintick))
     table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)
     cbTxt = na(C) ? "..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick))
