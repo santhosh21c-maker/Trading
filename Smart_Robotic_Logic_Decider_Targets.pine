@@ -58,11 +58,11 @@ t3Ratio = input.float(1.83, "Target 3 x B", step = 0.01, group = grpLadder)
 t4Ratio = input.float(2.08, "Target 4 x B", step = 0.01, group = grpLadder)
 
 grpStyle = "Colors"
-clrDecider = input.color(color.new(#9E9E9E, 0), "Decider", group = grpStyle)
+clrDecider = input.color(color.new(#EC407A, 0), "Decider", group = grpStyle)
 clrT1 = input.color(color.new(#26A69A, 0), "Target 1", group = grpStyle)
-clrT2 = input.color(color.new(#FF9800, 0), "Target 2", group = grpStyle)
-clrT3 = input.color(color.new(#EC407A, 0), "Target 3", group = grpStyle)
-clrT4 = input.color(color.new(#AB47BC, 0), "Target 4", group = grpStyle)
+clrT2 = input.color(color.new(#26A69A, 0), "Target 2", group = grpStyle)
+clrT3 = input.color(color.new(#EF5350, 0), "Target 3", group = grpStyle)
+clrT4 = input.color(color.new(#EF5350, 0), "Target 4", group = grpStyle)
 clrCenter = input.color(color.new(#787B86, 0), "Centre", group = grpStyle)
 lineWidth = input.int(1, "Line Width", minval = 1, maxval = 3, group = grpStyle)
 
@@ -313,10 +313,12 @@ var string frozenSeg = "INIT"
 var int frozenDate = -1
 var int frozenHyb = -1
 var int frozenForce = -1
+var int frozenDayKey = -1
 
 hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
-indianChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce
+dayKey = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
+indianChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce or dayKey != frozenDayKey
 canSnapIndian = enableLevels and isIndian and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
 if canSnapIndian and (indianChanged or na(frozenC))
     frozenC := liveC
@@ -327,6 +329,7 @@ if canSnapIndian and (indianChanged or na(frozenC))
     frozenDate := anchorDate
     frozenHyb := hybFlag
     frozenForce := forceFlag
+    frozenDayKey := dayKey
 
 C = isRobot ? liveC : frozenC
 B = isRobot ? liveB : frozenB
@@ -370,8 +373,8 @@ f_level(float price, string txt, color lineCol, bool showLine) =>
 if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
     f_clear()
     if showDecider
-        f_level(decHi, "Decider", clrDecider, true)
-        f_level(decLo, "Decider", clrDecider, true)
+        f_level(decHi, "Decider High", clrDecider, true)
+        f_level(decLo, "Decider Low", clrDecider, true)
     if showCenter
         f_level(C, "Centre", clrCenter, true)
     if showUpTgts

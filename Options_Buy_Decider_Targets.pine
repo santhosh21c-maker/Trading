@@ -1,18 +1,25 @@
 //@version=5
 indicator("Options Buy Decider Targets", overlay=true, max_lines_count=50, max_labels_count=50)
 
-// Decider + Targets as S/R on any option strike chart
-// C = mid, B = half range
-// Decider = C +/- 0.06*B
-// Targets = C +/- 1.00, 1.54, 1.83, 2.08 * B
+// Decider + Targets S/R for Indian index / stock / option charts
+// Verified ladder against PxTrading Smart Robotic Logic INDIAN:
+//   C = mid, B = half range of H/L
+//   Decider = C +/- 0.06*B
+//   Targets = C +/- 1.00, 1.54, 1.83, 2.08 * B
+//   Target 1 High/Low = H/L
+//
+// INDIAN mode: H/L = prior session day high/low, frozen from open.
+//   Screenshot proof: levels already plotted at 09:42 IST, so not OR freeze.
+// INTRADAY mode: opening-range H/L freeze after OR window.
+// PREDICTION mode: rolling lookback H/L.
 
 tz = "Asia/Kolkata"
 
-i_intraday = input.bool(true, "INTRADAY mode")
+i_mode = input.string("INDIAN Daily Prior HL", "Mode", options=["INDIAN Daily Prior HL", "INTRADAY OR Freeze", "PREDICTION Lookback"])
+i_hybrid5 = input.bool(true, "INDIAN hybrid force 5m HL")
 i_sess_start = input.int(915, "Session start HHMM", minval=0, maxval=2359)
 i_skip_mins = input.int(5, "Skip first N minutes", minval=0, maxval=120)
 i_or_mins = input.int(30, "OR length minutes", minval=5, maxval=180)
-i_use_pd = input.bool(false, "Widen with prior day HL")
 i_lookback = input.int(50, "Prediction lookback bars", minval=10, maxval=500)
 i_atr_mult = input.float(0.0, "Min B ATR mult", minval=0.0, step=0.05)
 i_atr_len = input.int(14, "ATR length", minval=1)
@@ -21,14 +28,20 @@ i_t1_r = input.float(1.00, "Target 1 ratio", step=0.01)
 i_t2_r = input.float(1.54, "Target 2 ratio", step=0.01)
 i_t3_r = input.float(1.83, "Target 3 ratio", step=0.01)
 i_t4_r = input.float(2.08, "Target 4 ratio", step=0.01)
-c_dec = input.color(color.rgb(245, 197, 66), "Decider color")
+c_dec = input.color(color.rgb(236, 64, 122), "Decider color")
 c_t1 = input.color(color.rgb(76, 175, 80), "Target 1 color")
-c_t2 = input.color(color.rgb(33, 150, 243), "Target 2 color")
-c_t3 = input.color(color.rgb(156, 39, 176), "Target 3 color")
-c_t4 = input.color(color.rgb(233, 30, 99), "Target 4 color")
-i_line_w = input.int(2, "Line width", minval=1, maxval=4)
+c_t2 = input.color(color.rgb(76, 175, 80), "Target 2 color")
+c_t3 = input.color(color.rgb(244, 67, 54), "Target 3 color")
+c_t4 = input.color(color.rgb(244, 67, 54), "Target 4 color")
+i_line_w = input.int(1, "Line width", minval=1, maxval=4)
+i_dashed = input.bool(true, "Dashed lines")
 i_show_table = input.bool(true, "Show info table")
 i_show_labels = input.bool(true, "Show level labels")
+
+is_indian = i_mode == "INDIAN Daily Prior HL"
+is_intraday = i_mode == "INTRADAY OR Freeze"
+is_pred = i_mode == "PREDICTION Lookback"
+line_style = i_dashed ? line.style_dashed : line.style_solid
 
 f_hhmm_to_min(hhmm) =>
     h = int(math.floor(hhmm / 100))
@@ -57,10 +70,57 @@ f_del_label(lb) =>
         label.delete(lb)
 
 f_mk_line(y, col, x1) =>
-    line.new(x1, y, bar_index, y, xloc=xloc.bar_index, extend=extend.right, color=col, width=i_line_w, style=line.style_solid)
+    line.new(x1, y, bar_index, y, xloc=xloc.bar_index, extend=extend.right, color=col, width=i_line_w, style=line_style)
 
 f_mk_label(y, txt, col) =>
-    label.new(bar_index, y, txt, xloc=xloc.bar_index, style=label.style_label_left, color=color.new(col, 85), textcolor=col, size=size.normal)
+    label.new(bar_index, y, txt, xloc=xloc.bar_index, style=label.style_label_left, color=color.new(col, 85), textcolor=col, size=size.small)
+
+f_apply_floor(useH, useL, atrv) =>
+    outH = useH
+    outL = useL
+    if not na(outH) and not na(outL)
+        if outH == outL
+            outH := outH + syminfo.mintick
+            outL := outL - syminfo.mintick
+        half = (outH - outL) * 0.5
+        floorB = i_atr_mult * atrv
+        if i_atr_mult > 0 and not na(floorB) and floorB > 0 and half < floorB
+            mid = (outH + outL) * 0.5
+            outH := mid + floorB
+            outL := mid - floorB
+    [outH, outL]
+
+// Prior calendar session H/L on chart TF by scanning bars
+f_prior_day_hl() =>
+    d0 = dayofmonth(time, tz)
+    m0 = month(time, tz)
+    y0 = year(time, tz)
+    h = float(na)
+    l = float(na)
+    maxScan = math.min(bar_index, 5000)
+    inPrior = false
+    priorD = int(na)
+    priorM = int(na)
+    priorY = int(na)
+    for i = 1 to maxScan
+        di = dayofmonth(time[i], tz)
+        mi = month(time[i], tz)
+        yi = year(time[i], tz)
+        sameAsToday = di == d0 and mi == m0 and yi == y0
+        if not sameAsToday
+            if not inPrior
+                inPrior := true
+                priorD := di
+                priorM := mi
+                priorY := yi
+                h := high[i]
+                l := low[i]
+            else if di == priorD and mi == priorM and yi == priorY
+                h := math.max(h, high[i])
+                l := math.min(l, low[i])
+            else
+                break
+    [h, l]
 
 var float or_h = na
 var float or_l = na
@@ -68,6 +128,7 @@ var bool or_done = false
 var int freeze_x = na
 var float H = na
 var float L = na
+var int frozen_day = na
 
 var line ln_ud = na
 var line ln_ld = na
@@ -94,8 +155,15 @@ atrv = ta.atr(i_atr_len)
 or_a = f_add_mins(i_sess_start, i_skip_mins)
 or_b = f_add_mins(or_a, i_or_mins)
 sess_new = ta.change(time("D", tz)) != 0
-pdh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
-pdl = request.security(syminfo.tickerid, "D", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+day_key = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
+
+// Daily series prior bar = previous session H/L (primary Indian source)
+pdh_d = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+pdl_d = request.security(syminfo.tickerid, "D", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+// Chart-TF prior session scan fallback / non-hybrid path
+[pdh_own, pdl_own] = f_prior_day_hl()
+// Hybrid: prior session H/L computed on 5-minute bars
+[pdh_5, pdl_5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 
 clear_drawings() =>
     f_del_line(ln_ud)
@@ -127,6 +195,7 @@ if sess_new
     freeze_x := na
     H := na
     L := na
+    frozen_day := na
     clear_drawings()
     ln_ud := na
     ln_ld := na
@@ -152,9 +221,35 @@ if sess_new
 levels_ready = false
 just_froze = false
 
-if i_intraday
+if is_indian
+    // Vendor INDIAN Daily Tomorrow: H/L = prior session day high/low, frozen from open.
+    // Target 1 High/Low equals that H/L. Hybrid Force 5 Min uses 5m prior-day scan.
+    useH = float(na)
+    useL = float(na)
+    if i_hybrid5 and not na(pdh_5) and not na(pdl_5)
+        useH := pdh_5
+        useL := pdl_5
+    else if not na(pdh_own) and not na(pdl_own)
+        useH := pdh_own
+        useL := pdl_own
+    else
+        useH := pdh_d
+        useL := pdl_d
+    [tmpH, tmpL] = f_apply_floor(useH, useL, atrv)
+    useH := tmpH
+    useL := tmpL
+    after_open = f_hhmm_to_min(f_hm(time)) >= f_hhmm_to_min(i_sess_start)
+    need_freeze = after_open and not na(useH) and not na(useL) and useH > useL and frozen_day != day_key
+    if need_freeze
+        H := useH
+        L := useL
+        freeze_x := bar_index
+        frozen_day := day_key
+        just_froze := true
+    levels_ready := frozen_day == day_key and not na(H) and not na(L) and H > L
+
+else if is_intraday
     in_or = f_in_win(time, or_a, or_b)
-    // Collect OR high/low during window; also collect after open if window was missed
     after_open = f_hhmm_to_min(f_hm(time)) >= f_hhmm_to_min(i_sess_start)
     if not or_done and after_open and in_or
         or_h := na(or_h) ? high : math.max(or_h, high)
@@ -164,41 +259,25 @@ if i_intraday
     if past_or
         useH = or_h
         useL = or_l
-        // If OR window had no bars, seed from current bar so levels still appear
         if na(useH) or na(useL)
             useH := high
             useL := low
-        if i_use_pd and not na(pdh) and not na(pdl)
-            useH := math.max(useH, pdh)
-            useL := math.min(useL, pdl)
-        if useH == useL
-            useH := useH + syminfo.mintick
-            useL := useL - syminfo.mintick
-        half = (useH - useL) * 0.5
-        floorB = i_atr_mult * atrv
-        if i_atr_mult > 0 and not na(floorB) and floorB > 0 and half < floorB
-            mid = (useH + useL) * 0.5
-            useH := mid + floorB
-            useL := mid - floorB
+        [tmpH2, tmpL2] = f_apply_floor(useH, useL, atrv)
+        useH := tmpH2
+        useL := tmpL2
         H := useH
         L := useL
         or_done := true
         freeze_x := bar_index
         just_froze := true
     levels_ready := or_done and not na(H) and not na(L) and H > L
+
 else
     hh = ta.highest(high, i_lookback)
     ll = ta.lowest(low, i_lookback)
-    half = (hh - ll) * 0.5
-    floorB = i_atr_mult * atrv
-    useH = hh
-    useL = ll
-    if i_atr_mult > 0 and not na(floorB) and floorB > 0 and half < floorB
-        mid = (hh + ll) * 0.5
-        useH := mid + floorB
-        useL := mid - floorB
-    H := useH
-    L := useL
+    [tmpH3, tmpL3] = f_apply_floor(hh, ll, atrv)
+    H := tmpH3
+    L := tmpL3
     freeze_x := math.max(bar_index - i_lookback, 0)
     levels_ready := not na(H) and not na(L) and H > L
     just_froze := barstate.islast
@@ -230,8 +309,7 @@ if levels_ready
     UT4 := C + i_t4_r * B
     LT4 := C - i_t4_r * B
 
-// Draw solid S/R lines once when ready; PREDICTION refreshes on last bar
-need_draw = levels_ready and (just_froze or na(ln_ud) or (not i_intraday and barstate.islast))
+need_draw = levels_ready and (just_froze or na(ln_ud) or (is_pred and barstate.islast))
 x1 = nz(freeze_x, bar_index)
 
 if need_draw
@@ -249,17 +327,16 @@ if need_draw
     if i_show_labels
         lb_ud := f_mk_label(UD, "Decider High " + str.tostring(UD, format.mintick), c_dec)
         lb_ld := f_mk_label(LD, "Decider Low " + str.tostring(LD, format.mintick), c_dec)
-        lb_ut1 := f_mk_label(UT1, "Target 1 High " + str.tostring(UT1, format.mintick), c_t1)
-        lb_lt1 := f_mk_label(LT1, "Target 1 Low " + str.tostring(LT1, format.mintick), c_t1)
-        lb_ut2 := f_mk_label(UT2, "Target 2 High " + str.tostring(UT2, format.mintick), c_t2)
-        lb_lt2 := f_mk_label(LT2, "Target 2 Low " + str.tostring(LT2, format.mintick), c_t2)
-        lb_ut3 := f_mk_label(UT3, "Target 3 High " + str.tostring(UT3, format.mintick), c_t3)
-        lb_lt3 := f_mk_label(LT3, "Target 3 Low " + str.tostring(LT3, format.mintick), c_t3)
-        lb_ut4 := f_mk_label(UT4, "Target 4 High " + str.tostring(UT4, format.mintick), c_t4)
-        lb_lt4 := f_mk_label(LT4, "Target 4 Low " + str.tostring(LT4, format.mintick), c_t4)
+        lb_ut1 := f_mk_label(UT1, "Target 1 " + str.tostring(UT1, format.mintick), c_t1)
+        lb_lt1 := f_mk_label(LT1, "Target 1 " + str.tostring(LT1, format.mintick), c_t1)
+        lb_ut2 := f_mk_label(UT2, "Target 2 " + str.tostring(UT2, format.mintick), c_t2)
+        lb_lt2 := f_mk_label(LT2, "Target 2 " + str.tostring(LT2, format.mintick), c_t2)
+        lb_ut3 := f_mk_label(UT3, "Target 3 " + str.tostring(UT3, format.mintick), c_t3)
+        lb_lt3 := f_mk_label(LT3, "Target 3 " + str.tostring(LT3, format.mintick), c_t3)
+        lb_ut4 := f_mk_label(UT4, "Target 4 " + str.tostring(UT4, format.mintick), c_t4)
+        lb_lt4 := f_mk_label(LT4, "Target 4 " + str.tostring(LT4, format.mintick), c_t4)
 
-// Keep label at right edge
-if levels_ready and i_intraday and or_done and barstate.islast and i_show_labels
+if levels_ready and not is_pred and barstate.islast and i_show_labels
     if not na(lb_ud)
         label.set_xy(lb_ud, bar_index, UD)
     if not na(lb_ld)
@@ -281,7 +358,6 @@ if levels_ready and i_intraday and or_done and barstate.islast and i_show_labels
     if not na(lb_lt4)
         label.set_xy(lb_lt4, bar_index, LT4)
 
-// Plots as backup so levels always show on price scale
 plot(UD, "Decider High", color=c_dec, linewidth=2, style=plot.style_linebr, trackprice=true)
 plot(LD, "Decider Low", color=c_dec, linewidth=2, style=plot.style_linebr, trackprice=true)
 plot(UT1, "Target 1 High", color=c_t1, linewidth=2, style=plot.style_linebr, trackprice=true)
@@ -295,12 +371,15 @@ plot(LT4, "Target 4 Low", color=c_t4, linewidth=2, style=plot.style_linebr, trac
 
 if i_show_table and barstate.islast
     var table tb = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 20))
-    mode_txt = i_intraday ? "INTRADAY" : "PREDICTION"
     st = "LIVE"
-    if i_intraday
-        st := or_done ? "FROZEN" : "Building OR"
+    if is_indian
+        st := levels_ready ? "FROZEN prior day" : "Waiting prior HL"
+    else if is_intraday
+        st := or_done ? "FROZEN OR" : "Building OR"
+    else
+        st := "LIVE lookback"
     table.cell(tb, 0, 0, "Mode", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 0, mode_txt, text_color=color.white, text_size=size.small)
+    table.cell(tb, 1, 0, is_indian ? "INDIAN" : is_intraday ? "INTRADAY" : "PREDICTION", text_color=color.white, text_size=size.small)
     table.cell(tb, 0, 1, "Status", text_color=color.gray, text_size=size.small)
     table.cell(tb, 1, 1, st, text_color=color.aqua, text_size=size.small)
     table.cell(tb, 0, 2, "H / L", text_color=color.gray, text_size=size.small)
@@ -315,5 +394,6 @@ if i_show_table and barstate.islast
     table.cell(tb, 1, 6, levels_ready ? str.tostring(UT3, format.mintick) + " / " + str.tostring(LT3, format.mintick) : "-", text_color=c_t3, text_size=size.small)
     table.cell(tb, 0, 7, "Target 4", text_color=color.gray, text_size=size.small)
     table.cell(tb, 1, 7, levels_ready ? str.tostring(UT4, format.mintick) + " / " + str.tostring(LT4, format.mintick) : "-", text_color=c_t4, text_size=size.small)
-    table.cell(tb, 0, 8, "OR window", text_color=color.gray, text_size=size.small)
-    table.cell(tb, 1, 8, str.tostring(or_a) + "-" + str.tostring(or_b), text_color=color.white, text_size=size.small)
+    table.cell(tb, 0, 8, "Source", text_color=color.gray, text_size=size.small)
+    srcTxt = is_indian ? "Prior day HL" : is_intraday ? str.tostring(or_a) + "-" + str.tostring(or_b) : "Lookback " + str.tostring(i_lookback)
+    table.cell(tb, 1, 8, srcTxt, text_color=color.white, text_size=size.small)
