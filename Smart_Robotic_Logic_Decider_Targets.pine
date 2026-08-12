@@ -1,47 +1,48 @@
 //@version=6
-// Smart Robotic Logic - Decider and Targets (Educational recreation)
+// Smart Robotic Logic - Decider and Targets Educational recreation
 //
-// LADDER (verified exact):
-//   C = (H+L)/2 , B = (H-L)/2
+// LADDER verified exact against PxTrading INDIAN 12 Aug 2026 CALL PUT:
+//   C = H+L / 2 , B = H-L / 2
 //   Decider = C +/- 0.06*B
-//   Targets = C +/- {1, 1.54, 1.83, 2.08}*B
+//   Targets = C +/- 1.00, 1.54, 1.83, 2.08 * B
+//   Target 1 High/Low = H/L
 //
-// BEHAVIOUR:
-//   ROBOT: Extend changes levels. Lines = fixed short length.
-//   INDIAN: prior-day FROZEN. Extend = line length only.
+// SEGMENTS:
+//   INDIAN - Index, Stock & Option
+//     H/L = prior session day high/low. Frozen from open. Extend = line length only.
+//     Hybrid Force 5 Min = prior-day H/L from 5m bars.
+//   Robot Prediction
+//     H/L from Extend window. LIVE. Ext changes levels.
+//     Auto OR-Last: Ext<60 clock OR Start+Skip .. Start+Ext ; Ext>=60 last-N + trim.
 //
-// BUG FIXED: f_add_mins used float `/` so Ext50 OR became 1004-1037 instead of 930-1005.
-//   Broken chip: or n=34 1004-1037 H71.40 L59.35 Dec65.75
-//   Ext60 OK-ish: Dec 65.20/64.55 aim 65.97 (H70.10 L59.65) — bump low trim slightly
-//
-// Ext50 OR = [Start+Skip .. Start+Extend) with INTEGER time math => 930-1005
-// Ext60 Last = trimHigh 10% + trimLow 25%
-//
+// BUG FIXED: f_add_mins must use int division. Float / made Ext50 OR 1004-1037 not 930-1005.
+
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
 grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
-segment = input.string("Robot Prediction", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
-extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain, tooltip = "ROBOT: Ext<60 = OR end = Start+Extend; Ext>=60 = last-N length. INDIAN: line length only.")
-anchorDate = input.time(timestamp("11 Aug 2026 00:00"), "Anchor Date", group = grpMain)
-hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain, tooltip = "INDIAN only.")
+segment = input.string("INDIAN - Index, Stock & Option", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
+extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain)
+anchorDate = input.time(timestamp("12 Aug 2026 00:00"), "Anchor Date", group = grpMain)
+hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain)
 
 grpRobot = "Robot Prediction"
-robotMode = input.string("Auto OR-Last", "Robot Window", options = ["Auto OR-Last", "Last Ext bars", "First Ext bars", "Offset Ext to 2Ext"], group = grpRobot, tooltip = "Auto OR-Last: Ext<60 = opening range 930-1005; Ext>=60 = last N bars.")
-robotStartHhmm = input.int(915, "Robot Start HHMM (IST)", minval = 900, maxval = 1500, group = grpRobot)
-robotOrSkipMins = input.int(15, "OR Skip Open mins", minval = 0, maxval = 60, group = grpRobot, tooltip = "Ext50 OR starts Start+Skip. 15 => 09:30-10:05 for Ext50.")
+robotMode = input.string("Auto OR-Last", "Robot Window", options = ["Auto OR-Last", "Last Ext bars", "First Ext bars", "Offset Ext to 2Ext"], group = grpRobot)
+robotStartHhmm = input.int(915, "Robot Start HHMM IST", minval = 900, maxval = 1500, group = grpRobot)
+robotOrSkipMins = input.int(15, "OR Skip Open mins", minval = 0, maxval = 60, group = grpRobot)
 robotLagManual = input.int(0, "Manual Lag Last mode", minval = 0, maxval = 500, group = grpRobot)
 robotHSource = input.string("High", "Robot H Source", options = ["High", "Body high", "Close"], group = grpRobot)
 robotLSource = input.string("Body low", "Robot L Source", options = ["Low", "Body low", "Close"], group = grpRobot)
-robotTrimHighPct = input.float(10.0, "Trim highs pct Last Ext60", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Prior chip high trim toward aim.")
-robotTrimLowPct = input.float(25.0, "Trim lows pct Last Ext60", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot, tooltip = "Lift lows toward aim.")
-robotLineRight = input.int(40, "Robot Line Right (bars)", minval = 5, maxval = 200, group = grpRobot)
-robotLineLeft = input.int(10, "Robot Line Left (bars)", minval = 0, maxval = 200, group = grpRobot)
+robotTrimHighPct = input.float(10.0, "Trim highs pct Last Ext60", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot)
+robotTrimLowPct = input.float(25.0, "Trim lows pct Last Ext60", minval = 0.0, maxval = 40.0, step = 5.0, group = grpRobot)
+robotLineRight = input.int(40, "Robot Line Right bars", minval = 5, maxval = 200, group = grpRobot)
+robotLineLeft = input.int(10, "Robot Line Left bars", minval = 0, maxval = 200, group = grpRobot)
 
 grpSnap = "Indian Freeze / Lines"
-forceRecalc = input.bool(false, "Force Recalculate Now (Indian)", group = grpSnap)
-indianLineLeft = input.int(60, "Indian Line Left (bars)", minval = 0, maxval = 500, group = grpSnap)
-indianExtraRight = input.int(0, "Indian Extra Right (bars)", minval = 0, maxval = 500, group = grpSnap)
+forceRecalc = input.bool(false, "Force Recalculate Now Indian", group = grpSnap)
+indianLineLeft = input.int(60, "Indian Line Left bars", minval = 0, maxval = 500, group = grpSnap)
+indianExtraRight = input.int(0, "Indian Extra Right bars", minval = 0, maxval = 500, group = grpSnap)
+indianExtendRight = input.bool(true, "Indian lines extend right", group = grpSnap)
 
 grpShow = "Show / Hide"
 showDecider = input.bool(true, "Show Decider", group = grpShow)
@@ -49,8 +50,9 @@ showUpTgts = input.bool(true, "Show Upper Targets", group = grpShow)
 showDnTgts = input.bool(true, "Show Lower Targets", group = grpShow)
 showLabels = input.bool(true, "Show Labels", group = grpShow)
 showCenter = input.bool(false, "Show Centre C", group = grpShow)
+showPlots = input.bool(true, "Show price-scale plots", group = grpShow)
 
-grpLadder = "Ladder (x Base B)"
+grpLadder = "Ladder x Base B"
 deciderFrac = input.float(0.06, "Decider +/- x B", step = 0.001, group = grpLadder)
 t1Ratio = input.float(1.00, "Target 1 x B", step = 0.01, group = grpLadder)
 t2Ratio = input.float(1.54, "Target 2 x B", step = 0.01, group = grpLadder)
@@ -77,7 +79,7 @@ f_hhmm(int idx) =>
 f_same_day(int idx, int d0, int m0, int y0) =>
     dayofmonth(time[idx], tz) == d0 and month(time[idx], tz) == m0 and year(time[idx], tz) == y0
 
-// MUST use int() on divisions — Pine `/` is float and produced OR 1004-1037 instead of 930-1005
+// MUST use int on divisions — Pine / is float and produced OR 1004-1037 instead of 930-1005
 f_add_mins(int hhmm, int mins) =>
     int h = int(hhmm / 100)
     int m = hhmm % 100
@@ -125,6 +127,9 @@ f_prior_day_hl() =>
 
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
+// Daily series fallback when bar scan has no prior session yet
+float hDayD = request.security(syminfo.tickerid, "D", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+float lDayD = request.security(syminfo.tickerid, "D", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
 
 f_trim_hl(float[] hs, float[] ls, float trimHighPct, float trimLowPct) =>
     float hOut = na
@@ -226,7 +231,7 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
     int iFrom = na
     int iTo = na
     int usedLag = 0
-    string branch = "—"
+    string branch = "-"
     int d0 = dayofmonth(time, tz)
     int m0 = month(time, tz)
     int y0 = year(time, tz)
@@ -243,7 +248,7 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
         iFrom := fA
         iTo := tA
     else if mode == "Auto OR-Last"
-        // Clock OR: Start+Skip .. Start+Extend — Ext50 => 930-1005 (int math)
+        // Clock OR: Start+Skip .. Start+Extend — Ext50 => 930-1005 int math
         int orStart = f_add_mins(startHhmm, orSkip)
         int orEnd = f_add_mins(startHhmm, len)
         branch := "or" + str.tostring(orStart) + "-" + str.tostring(orEnd)
@@ -300,8 +305,21 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
 
 [hRob, lRob, nRob, i0, i1, lagUsed, winBranch] = f_robot_hl(extendIn, robotStartHhmm, robotOrSkipMins, robotMode, robotHSource, robotLSource, robotLagManual, robotTrimHighPct, robotTrimLowPct)
 
-rawH = isIndian ? (hybrid5m ? hDay5 : hDayOwn) : hRob
-rawL = isIndian ? (hybrid5m ? lDay5 : lDayOwn) : lRob
+// INDIAN H/L: hybrid 5m prior-day scan, else chart-TF scan, else daily series
+float indianH = na
+float indianL = na
+if hybrid5m and not na(hDay5) and not na(lDay5)
+    indianH := hDay5
+    indianL := lDay5
+else if not na(hDayOwn) and not na(lDayOwn)
+    indianH := hDayOwn
+    indianL := lDayOwn
+else
+    indianH := hDayD
+    indianL := lDayD
+
+rawH = isIndian ? indianH : hRob
+rawL = isIndian ? indianL : lRob
 liveC = (rawH + rawL) / 2.0
 liveB = (rawH - rawL) / 2.0
 
@@ -319,6 +337,7 @@ hybFlag = hybrid5m ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
 dayKey = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
 indianChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce or dayKey != frozenDayKey
+// Freeze on last bar when prior-day H/L is valid; refreeze each new IST day
 canSnapIndian = enableLevels and isIndian and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
 if canSnapIndian and (indianChanged or na(frozenC))
     frozenC := liveC
@@ -364,10 +383,12 @@ f_level(float price, string txt, color lineCol, bool showLine) =>
     if not na(price) and showLine
         int x1 = isRobot ? bar_index - robotLineLeft : bar_index - indianLineLeft
         int x2 = isRobot ? bar_index + robotLineRight : bar_index + indianRight
-        line ln = line.new(x1, price, x2, price, xloc = xloc.bar_index, extend = extend.none, color = lineCol, style = line.style_dashed, width = lineWidth)
+        extMode = isIndian and indianExtendRight ? extend.right : extend.none
+        line ln = line.new(x1, price, x2, price, xloc = xloc.bar_index, extend = extMode, color = lineCol, style = line.style_dashed, width = lineWidth)
         array.push(lines, ln)
         if showLabels
-            label lb = label.new(x2, price, txt + " / " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(lineCol, 85), textcolor = lineCol, size = size.small)
+            int lx = isIndian and indianExtendRight ? bar_index + 2 : x2
+            label lb = label.new(lx, price, txt + " " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(lineCol, 85), textcolor = lineCol, size = size.small)
             array.push(labels, lb)
 
 if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
@@ -390,30 +411,45 @@ if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
 
 bgcolor(color.new(color.black, 100))
 plot(close, title = "seed", display = display.none)
-plot(enableLevels ? dispH : na, "Window High", display = display.data_window)
-plot(enableLevels ? dispL : na, "Window Low", display = display.data_window)
-plot(enableLevels ? C : na, "Centre C", color = clrCenter, display = display.data_window)
-plot(enableLevels ? B : na, "Base B", color = clrCenter, display = display.data_window)
-plot(enableLevels and showDecider ? decHi : na, "Decider High", color = clrDecider, display = display.data_window)
-plot(enableLevels and showDecider ? decLo : na, "Decider Low", color = clrDecider, display = display.data_window)
+
+plotH = enableLevels and showPlots ? dispH : na
+plotL = enableLevels and showPlots ? dispL : na
+plotC = enableLevels and showPlots ? C : na
+plotB = enableLevels and showPlots ? B : na
+plotDecHi = enableLevels and showPlots and showDecider ? decHi : na
+plotDecLo = enableLevels and showPlots and showDecider ? decLo : na
+plotUT1 = enableLevels and showPlots and showUpTgts ? upT1 : na
+plotLT1 = enableLevels and showPlots and showDnTgts ? dnT1 : na
+plotUT4 = enableLevels and showPlots and showUpTgts ? upT4 : na
+plotLT4 = enableLevels and showPlots and showDnTgts ? dnT4 : na
+
+plot(plotH, "Window High", display = display.data_window)
+plot(plotL, "Window Low", display = display.data_window)
+plot(plotC, "Centre C", color = clrCenter, display = display.data_window)
+plot(plotB, "Base B", color = clrCenter, display = display.data_window)
+plot(plotDecHi, "Decider High", color = clrDecider, linewidth = 2, style = plot.style_linebr, trackprice = true)
+plot(plotDecLo, "Decider Low", color = clrDecider, linewidth = 2, style = plot.style_linebr, trackprice = true)
+plot(plotUT1, "Target 1 High", color = clrT1, linewidth = 1, style = plot.style_linebr, trackprice = true)
+plot(plotLT1, "Target 1 Low", color = clrT1, linewidth = 1, style = plot.style_linebr, trackprice = true)
+plot(plotUT4, "Target 4 High", color = clrT4, linewidth = 1, style = plot.style_linebr)
+plot(plotLT4, "Target 4 Low", color = clrT4, linewidth = 1, style = plot.style_linebr)
 
 var table info = table.new(position.top_right, 1, 6, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
     table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + (isRobot ? " | LIVE" : " | FROZEN"), text_color = color.white, text_size = size.small)
     if isRobot
-        t0 = na(i0) ? "—" : str.tostring(f_hhmm(i0))
-        t1 = na(i1) ? "—" : str.tostring(f_hhmm(i1))
+        t0 = na(i0) ? "-" : str.tostring(f_hhmm(i0))
+        t1 = na(i1) ? "-" : str.tostring(f_hhmm(i1))
         table.cell(info, 0, 1, winBranch + " n=" + str.tostring(nRob) + " " + t0 + "-" + t1, text_color = color.aqua, text_size = size.small)
-        tip = extendIn == 50 ? "aim H77.15 L66.65" : extendIn == 60 ? "aim H69.75 L61.70" : ""
-        table.cell(info, 0, 5, tip, text_color = color.gray, text_size = size.tiny)
+        table.cell(info, 0, 5, "Robot window LIVE", text_color = color.gray, text_size = size.tiny)
     else
-        table.cell(info, 0, 1, "prior-day | Ext=line length", text_color = color.aqua, text_size = size.small)
-        table.cell(info, 0, 5, "", text_color = color.gray, text_size = size.tiny)
-    hlTxt = na(dispH) ? "Waiting..." : ("H " + str.tostring(dispH, format.mintick) + "  L " + str.tostring(dispL, format.mintick))
+        hybTxt = hybrid5m ? "hybrid 5m" : "chart TF"
+        table.cell(info, 0, 1, "prior-day " + hybTxt + " | Ext=line length", text_color = color.aqua, text_size = size.small)
+        table.cell(info, 0, 5, "Target 1 = prior day H/L", text_color = color.gray, text_size = size.tiny)
+    hlTxt = na(dispH) ? "Waiting prior H/L..." : ("H " + str.tostring(dispH, format.mintick) + "  L " + str.tostring(dispL, format.mintick))
     table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)
     cbTxt = na(C) ? "..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick))
     table.cell(info, 0, 3, cbTxt, text_color = color.yellow, text_size = size.small)
-    aim = extendIn == 60 ? "aim 65.97/65.48" : extendIn == 50 ? "aim 72.22/71.59" : ""
-    decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick) + "  " + aim)
+    decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick))
     table.cell(info, 0, 4, decTxt, text_color = color.orange, text_size = size.small)
