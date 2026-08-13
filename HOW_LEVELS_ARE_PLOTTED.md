@@ -9,7 +9,9 @@ Verified on PxTrading **Smart Robotic Logic – INDIAN** screenshots (12 Aug & 1
 | **INDIAN** | **Prior session day High / Low** of the *same* symbol (that Call/Put/Index). Frozen for the whole day from the open. `Extend` only changes how long the lines are drawn. |
 | **Robot Prediction** | High / Low of a **live** bar window controlled by `Extend` (opening-range clock, last-N bars, etc.). |
 
-**Important:** Session *today’s* High/Low labels on the chart (e.g. High 148.50 / Low 97.00) are **not** the ladder H/L. Ladder H/L = **Target 1** = **yesterday’s** high/low of that option.
+**Important:** Session *today’s* High/Low labels on the chart (e.g. High 148.50 / Low 97.00) are **not** the ladder H/L. Ladder H/L = **Target 1** = **yesterday’s NSE session (09:15–15:30 IST)** high/low of that option.
+
+**Do not use raw TradingView Daily OHLC on NSE options** — it often disagrees with the vendor (example: Daily gave 214/100 while vendor Target 1 was 148.33/114). Use **Chart TF session** or **Hybrid 5m session** scan instead.
 
 ### Today’s CALL example (Nifty 18 AUG CE 24400)
 - Ladder **H = 148.33**, **L = 114.00** (= Target 1 High / Low)
