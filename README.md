@@ -2,14 +2,14 @@
 
 ## Smart Robotic Logic (`Smart_Robotic_Logic_Decider_Targets.pine`)
 
-Main Decider / Target indicator with **both segments**:
+Main Decider / Target indicator with **both segments**. Full math: **`HOW_LEVELS_ARE_PLOTTED.md`**.
 
 | Segment | H/L source | Behaviour |
 |---|---|---|
-| **INDIAN - Index, Stock & Option** | Prior session day high/low | Frozen from open. Extend = line length only. Optional Hybrid Force 5 Min. |
+| **INDIAN - Index, Stock & Option** | Prior session day high/low (`Daily series` default) | Frozen from open. Extend = line length only. |
 | **Robot Prediction** | Extend window (Auto OR-Last / Last / First / Offset) | LIVE. Extend changes levels. |
 
-**Ladder (verified):**
+**Ladder (verified 12–13 Aug 2026 CALL/PUT):**
 - `C = (H+L)/2`, `B = (H-L)/2`
 - Decider = `C ± 0.06·B`
 - Targets = `C ± {1.00, 1.54, 1.83, 2.08}·B` → Target 1 = H/L
