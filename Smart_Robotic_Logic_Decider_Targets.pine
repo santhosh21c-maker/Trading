@@ -25,7 +25,10 @@ enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("INDIAN - Index, Stock & Option", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
 extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain)
 anchorDate = input.time(timestamp("13 Aug 2026 00:00"), "Anchor Date", group = grpMain)
-indianHlSrc = input.string("Daily series", "INDIAN H/L Source", options = ["Daily series", "Hybrid 5m", "Chart TF"], group = grpMain)
+indianHlSrc = input.string("Chart TF session", "INDIAN H/L Source", options = ["Chart TF session", "Hybrid 5m session", "Daily series"], group = grpMain)
+i_sess_a = input.int(915, "NSE session start HHMM", minval=900, maxval=1600, group = grpMain)
+i_sess_b = input.int(1530, "NSE session end HHMM", minval=900, maxval=1600, group = grpMain)
+i_showHlDbg = input.bool(true, "Show H/L source debug", group = grpMain)
 
 grpRobot = "Robot Prediction"
 robotMode = input.string("Auto OR-Last", "Robot Window", options = ["Auto OR-Last", "Last Ext bars", "First Ext bars", "Offset Ext to 2Ext"], group = grpRobot)
@@ -77,6 +80,10 @@ indianRight = extendIn + indianExtraRight
 f_hhmm(int idx) =>
     hour(time[idx], tz) * 100 + minute(time[idx], tz)
 
+f_in_nse(int idx) =>
+    int hm = f_hhmm(idx)
+    hm >= i_sess_a and hm <= i_sess_b
+
 f_same_day(int idx, int d0, int m0, int y0) =>
     dayofmonth(time[idx], tz) == d0 and month(time[idx], tz) == m0 and year(time[idx], tz) == y0
 
@@ -95,13 +102,14 @@ f_pick_h(int idx, string src) =>
 f_pick_l(int idx, string src) =>
     src == "Close" ? close[idx] : src == "Body low" ? math.min(open[idx], close[idx]) : low[idx]
 
+// Prior IST calendar day High/Low using only NSE session bars — matches vendor Target 1 better than raw Daily
 f_prior_day_hl() =>
     int d0 = dayofmonth(time, tz)
     int m0 = month(time, tz)
     int y0 = year(time, tz)
     float h = na
     float l = na
-    int maxScan = math.min(bar_index, 5000)
+    int maxScan = math.min(bar_index, 8000)
     bool inPrior = false
     int priorD = na
     int priorM = na
@@ -117,20 +125,19 @@ f_prior_day_hl() =>
                 priorD := di
                 priorM := mi
                 priorY := yi
-                h := high[i]
-                l := low[i]
-            else if di == priorD and mi == priorM and yi == priorY
-                h := math.max(h, high[i])
-                l := math.min(l, low[i])
-            else
+            if di == priorD and mi == priorM and yi == priorY
+                if f_in_nse(i)
+                    h := na(h) ? high[i] : math.max(h, high[i])
+                    l := na(l) ? low[i] : math.min(l, low[i])
+            else if inPrior
                 break
     [h, l]
 
 [hDayOwn, lDayOwn] = f_prior_day_hl()
 [hDay5, lDay5] = request.security(syminfo.tickerid, "5", f_prior_day_hl(), lookahead = barmerge.lookahead_off)
-// Daily series fallback when bar scan has no prior session yet
-float hDayD = request.security(syminfo.tickerid, "D", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
-float lDayD = request.security(syminfo.tickerid, "D", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+// Raw daily often WRONG on NSE options vs vendor — keep only as optional fallback
+float hDayD = request.security(syminfo.tickerid, "D", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+float lDayD = request.security(syminfo.tickerid, "D", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 
 f_trim_hl(float[] hs, float[] ls, float trimHighPct, float trimLowPct) =>
     float hOut = na
@@ -306,22 +313,26 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
 
 [hRob, lRob, nRob, i0, i1, lagUsed, winBranch] = f_robot_hl(extendIn, robotStartHhmm, robotOrSkipMins, robotMode, robotHSource, robotLSource, robotLagManual, robotTrimHighPct, robotTrimLowPct)
 
-// INDIAN H/L: Daily series matches vendor Target 1 = prior day OHLC best
+// INDIAN H/L: prefer NSE session scan of prior IST day Chart TF / 5m
+// Daily series was producing wrong Target 1 on options e.g. 214/100 vs vendor 148/114
 float indianH = na
 float indianL = na
-if indianHlSrc == "Hybrid 5m" and not na(hDay5) and not na(lDay5)
+if indianHlSrc == "Hybrid 5m session" and not na(hDay5) and not na(lDay5)
     indianH := hDay5
     indianL := lDay5
-else if indianHlSrc == "Chart TF" and not na(hDayOwn) and not na(lDayOwn)
+else if indianHlSrc == "Daily series" and not na(hDayD) and not na(lDayD)
+    indianH := hDayD
+    indianL := lDayD
+else
+    // Chart TF session default
     indianH := hDayOwn
     indianL := lDayOwn
-else
-    // Daily series primary default + fallback for other modes if scan empty
-    indianH := not na(hDayD) ? hDayD : hDayOwn
-    indianL := not na(lDayD) ? lDayD : lDayOwn
     if na(indianH) or na(indianL)
         indianH := hDay5
         indianL := lDay5
+    if na(indianH) or na(indianL)
+        indianH := hDayD
+        indianL := lDayD
 
 rawH = isIndian ? indianH : hRob
 rawL = isIndian ? indianL : lRob
@@ -338,10 +349,11 @@ var int frozenSrc = -1
 var int frozenForce = -1
 var int frozenDayKey = -1
 
-srcFlag = indianHlSrc == "Hybrid 5m" ? 2 : indianHlSrc == "Chart TF" ? 1 : 0
+srcFlag = indianHlSrc == "Hybrid 5m session" ? 2 : indianHlSrc == "Daily series" ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
 dayKey = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
-indianChanged = segment != frozenSeg or anchorDate != frozenDate or srcFlag != frozenSrc or forceFlag != frozenForce or dayKey != frozenDayKey
+hlDrift = not na(frozenH) and not na(rawH) and (math.abs(frozenH - rawH) > syminfo.mintick or math.abs(frozenL - rawL) > syminfo.mintick)
+indianChanged = segment != frozenSeg or anchorDate != frozenDate or srcFlag != frozenSrc or forceFlag != frozenForce or dayKey != frozenDayKey or hlDrift
 canSnapIndian = enableLevels and isIndian and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
 if canSnapIndian and (indianChanged or na(frozenC))
     frozenC := liveC
@@ -438,7 +450,7 @@ plot(plotLT1, "Target 1 Low", color = clrT1, linewidth = 1, style = plot.style_l
 plot(plotUT4, "Target 4 High", color = clrT4, linewidth = 1, style = plot.style_linebr)
 plot(plotLT4, "Target 4 Low", color = clrT4, linewidth = 1, style = plot.style_linebr)
 
-var table info = table.new(position.top_right, 2, 9, bgcolor = color.new(color.black, 80), border_width = 0)
+var table info = table.new(position.top_right, 2, 12, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
     table.cell(info, 0, 0, segShort + " Ext " + str.tostring(extendIn), text_color = color.white, text_size = size.small)
@@ -450,7 +462,7 @@ if barstate.islast
         table.cell(info, 1, 1, winBranch + " n=" + str.tostring(nRob) + " " + t0 + "-" + t1, text_color = color.aqua, text_size = size.small)
     else
         table.cell(info, 0, 1, "H/L src", text_color = color.gray, text_size = size.small)
-        table.cell(info, 1, 1, indianHlSrc + " prior day", text_color = color.aqua, text_size = size.small)
+        table.cell(info, 1, 1, indianHlSrc, text_color = color.aqua, text_size = size.small)
     table.cell(info, 0, 2, "H / L = T1", text_color = color.gray, text_size = size.small)
     table.cell(info, 1, 2, na(dispH) ? "Waiting..." : str.tostring(dispH, format.mintick) + " / " + str.tostring(dispL, format.mintick), text_color = color.silver, text_size = size.small)
     table.cell(info, 0, 3, "C / B", text_color = color.gray, text_size = size.small)
@@ -465,3 +477,10 @@ if barstate.islast
     table.cell(info, 1, 7, na(upT3) ? "" : str.tostring(upT3, format.mintick) + " / " + str.tostring(dnT3, format.mintick), text_color = clrT3, text_size = size.small)
     table.cell(info, 0, 8, "Target 4", text_color = color.gray, text_size = size.small)
     table.cell(info, 1, 8, na(upT4) ? "" : str.tostring(upT4, format.mintick) + " / " + str.tostring(dnT4, format.mintick), text_color = clrT4, text_size = size.small)
+    if i_showHlDbg and isIndian
+        table.cell(info, 0, 9, "dbg Chart TF", text_color = color.gray, text_size = size.tiny)
+        table.cell(info, 1, 9, na(hDayOwn) ? "-" : str.tostring(hDayOwn, format.mintick) + " / " + str.tostring(lDayOwn, format.mintick), text_color = color.gray, text_size = size.tiny)
+        table.cell(info, 0, 10, "dbg Hybrid 5m", text_color = color.gray, text_size = size.tiny)
+        table.cell(info, 1, 10, na(hDay5) ? "-" : str.tostring(hDay5, format.mintick) + " / " + str.tostring(lDay5, format.mintick), text_color = color.gray, text_size = size.tiny)
+        table.cell(info, 0, 11, "dbg Daily raw", text_color = color.gray, text_size = size.tiny)
+        table.cell(info, 1, 11, na(hDayD) ? "-" : str.tostring(hDayD, format.mintick) + " / " + str.tostring(lDayD, format.mintick), text_color = color.orange, text_size = size.tiny)
