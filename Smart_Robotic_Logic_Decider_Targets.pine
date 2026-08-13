@@ -1,21 +1,22 @@
 //@version=6
 // Smart Robotic Logic - Decider and Targets Educational recreation
 //
-// LADDER verified exact against PxTrading INDIAN 12 Aug 2026 CALL PUT:
+// HOW LEVELS ARE PLOTTED — see HOW_LEVELS_ARE_PLOTTED.md
+//
+// LADDER verified on PxTrading INDIAN 12 Aug + 13 Aug 2026 CALL/PUT:
+//   H/L = prior session day high/low of this symbol  Target 1 = H/L
 //   C = H+L / 2 , B = H-L / 2
 //   Decider = C +/- 0.06*B
 //   Targets = C +/- 1.00, 1.54, 1.83, 2.08 * B
-//   Target 1 High/Low = H/L
+//
+// 13 Aug CALL CE24400 example: H=148.33 L=114
+//   Decider 132.19/130.14  T2 157.60/104.73  T3 162.58/99.75  T4 166.87/95.46
 //
 // SEGMENTS:
-//   INDIAN - Index, Stock & Option
-//     H/L = prior session day high/low. Frozen from open. Extend = line length only.
-//     Hybrid Force 5 Min = prior-day H/L from 5m bars.
-//   Robot Prediction
-//     H/L from Extend window. LIVE. Ext changes levels.
-//     Auto OR-Last: Ext<60 clock OR Start+Skip .. Start+Ext ; Ext>=60 last-N + trim.
+//   INDIAN - prior-day FROZEN. Extend = line length only.
+//   Robot Prediction - LIVE Extend window. Same ladder ratios.
 //
-// BUG FIXED: f_add_mins must use int division. Float / made Ext50 OR 1004-1037 not 930-1005.
+// BUG FIXED: f_add_mins must use int division Ext50 OR 930-1005 not 1004-1037.
 
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
@@ -23,8 +24,8 @@ grpMain = "Main"
 enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("INDIAN - Index, Stock & Option", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
 extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain)
-anchorDate = input.time(timestamp("12 Aug 2026 00:00"), "Anchor Date", group = grpMain)
-hybrid5m = input.bool(true, "Hybrid Force 5 Min Values", group = grpMain)
+anchorDate = input.time(timestamp("13 Aug 2026 00:00"), "Anchor Date", group = grpMain)
+indianHlSrc = input.string("Daily series", "INDIAN H/L Source", options = ["Daily series", "Hybrid 5m", "Chart TF"], group = grpMain)
 
 grpRobot = "Robot Prediction"
 robotMode = input.string("Auto OR-Last", "Robot Window", options = ["Auto OR-Last", "Last Ext bars", "First Ext bars", "Offset Ext to 2Ext"], group = grpRobot)
@@ -305,18 +306,22 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
 
 [hRob, lRob, nRob, i0, i1, lagUsed, winBranch] = f_robot_hl(extendIn, robotStartHhmm, robotOrSkipMins, robotMode, robotHSource, robotLSource, robotLagManual, robotTrimHighPct, robotTrimLowPct)
 
-// INDIAN H/L: hybrid 5m prior-day scan, else chart-TF scan, else daily series
+// INDIAN H/L: Daily series matches vendor Target 1 = prior day OHLC best
 float indianH = na
 float indianL = na
-if hybrid5m and not na(hDay5) and not na(lDay5)
+if indianHlSrc == "Hybrid 5m" and not na(hDay5) and not na(lDay5)
     indianH := hDay5
     indianL := lDay5
-else if not na(hDayOwn) and not na(lDayOwn)
+else if indianHlSrc == "Chart TF" and not na(hDayOwn) and not na(lDayOwn)
     indianH := hDayOwn
     indianL := lDayOwn
 else
-    indianH := hDayD
-    indianL := lDayD
+    // Daily series primary default + fallback for other modes if scan empty
+    indianH := not na(hDayD) ? hDayD : hDayOwn
+    indianL := not na(lDayD) ? lDayD : lDayOwn
+    if na(indianH) or na(indianL)
+        indianH := hDay5
+        indianL := lDay5
 
 rawH = isIndian ? indianH : hRob
 rawL = isIndian ? indianL : lRob
@@ -329,15 +334,14 @@ var float frozenH = na
 var float frozenL = na
 var string frozenSeg = "INIT"
 var int frozenDate = -1
-var int frozenHyb = -1
+var int frozenSrc = -1
 var int frozenForce = -1
 var int frozenDayKey = -1
 
-hybFlag = hybrid5m ? 1 : 0
+srcFlag = indianHlSrc == "Hybrid 5m" ? 2 : indianHlSrc == "Chart TF" ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
 dayKey = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
-indianChanged = segment != frozenSeg or anchorDate != frozenDate or hybFlag != frozenHyb or forceFlag != frozenForce or dayKey != frozenDayKey
-// Freeze on last bar when prior-day H/L is valid; refreeze each new IST day
+indianChanged = segment != frozenSeg or anchorDate != frozenDate or srcFlag != frozenSrc or forceFlag != frozenForce or dayKey != frozenDayKey
 canSnapIndian = enableLevels and isIndian and barstate.islast and not na(liveC) and not na(liveB) and liveB > 0
 if canSnapIndian and (indianChanged or na(frozenC))
     frozenC := liveC
@@ -346,7 +350,7 @@ if canSnapIndian and (indianChanged or na(frozenC))
     frozenL := rawL
     frozenSeg := segment
     frozenDate := anchorDate
-    frozenHyb := hybFlag
+    frozenSrc := srcFlag
     frozenForce := forceFlag
     frozenDayKey := dayKey
 
@@ -388,14 +392,14 @@ f_level(float price, string txt, color lineCol, bool showLine) =>
         array.push(lines, ln)
         if showLabels
             int lx = isIndian and indianExtendRight ? bar_index + 2 : x2
-            label lb = label.new(lx, price, txt + " " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(lineCol, 85), textcolor = lineCol, size = size.small)
+            label lb = label.new(lx, price, txt + " / " + str.tostring(price, format.mintick), xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(lineCol, 85), textcolor = lineCol, size = size.small)
             array.push(labels, lb)
 
 if barstate.islast and enableLevels and not na(C) and not na(B) and B > 0
     f_clear()
     if showDecider
-        f_level(decHi, "Decider High", clrDecider, true)
-        f_level(decLo, "Decider Low", clrDecider, true)
+        f_level(decHi, "Decider", clrDecider, true)
+        f_level(decLo, "Decider", clrDecider, true)
     if showCenter
         f_level(C, "Centre", clrCenter, true)
     if showUpTgts
@@ -434,22 +438,30 @@ plot(plotLT1, "Target 1 Low", color = clrT1, linewidth = 1, style = plot.style_l
 plot(plotUT4, "Target 4 High", color = clrT4, linewidth = 1, style = plot.style_linebr)
 plot(plotLT4, "Target 4 Low", color = clrT4, linewidth = 1, style = plot.style_linebr)
 
-var table info = table.new(position.top_right, 1, 6, bgcolor = color.new(color.black, 80), border_width = 0)
+var table info = table.new(position.top_right, 2, 9, bgcolor = color.new(color.black, 80), border_width = 0)
 if barstate.islast
     segShort = isIndian ? "INDIAN" : "ROBOT"
-    table.cell(info, 0, 0, segShort + " | Ext " + str.tostring(extendIn) + (isRobot ? " | LIVE" : " | FROZEN"), text_color = color.white, text_size = size.small)
+    table.cell(info, 0, 0, segShort + " Ext " + str.tostring(extendIn), text_color = color.white, text_size = size.small)
+    table.cell(info, 1, 0, isRobot ? "LIVE" : "FROZEN", text_color = color.aqua, text_size = size.small)
     if isRobot
         t0 = na(i0) ? "-" : str.tostring(f_hhmm(i0))
         t1 = na(i1) ? "-" : str.tostring(f_hhmm(i1))
-        table.cell(info, 0, 1, winBranch + " n=" + str.tostring(nRob) + " " + t0 + "-" + t1, text_color = color.aqua, text_size = size.small)
-        table.cell(info, 0, 5, "Robot window LIVE", text_color = color.gray, text_size = size.tiny)
+        table.cell(info, 0, 1, "Window", text_color = color.gray, text_size = size.small)
+        table.cell(info, 1, 1, winBranch + " n=" + str.tostring(nRob) + " " + t0 + "-" + t1, text_color = color.aqua, text_size = size.small)
     else
-        hybTxt = hybrid5m ? "hybrid 5m" : "chart TF"
-        table.cell(info, 0, 1, "prior-day " + hybTxt + " | Ext=line length", text_color = color.aqua, text_size = size.small)
-        table.cell(info, 0, 5, "Target 1 = prior day H/L", text_color = color.gray, text_size = size.tiny)
-    hlTxt = na(dispH) ? "Waiting prior H/L..." : ("H " + str.tostring(dispH, format.mintick) + "  L " + str.tostring(dispL, format.mintick))
-    table.cell(info, 0, 2, hlTxt, text_color = color.silver, text_size = size.small)
-    cbTxt = na(C) ? "..." : ("C " + str.tostring(C, format.mintick) + "  B " + str.tostring(B, format.mintick))
-    table.cell(info, 0, 3, cbTxt, text_color = color.yellow, text_size = size.small)
-    decTxt = na(decHi) ? "" : ("Dec " + str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick))
-    table.cell(info, 0, 4, decTxt, text_color = color.orange, text_size = size.small)
+        table.cell(info, 0, 1, "H/L src", text_color = color.gray, text_size = size.small)
+        table.cell(info, 1, 1, indianHlSrc + " prior day", text_color = color.aqua, text_size = size.small)
+    table.cell(info, 0, 2, "H / L = T1", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 2, na(dispH) ? "Waiting..." : str.tostring(dispH, format.mintick) + " / " + str.tostring(dispL, format.mintick), text_color = color.silver, text_size = size.small)
+    table.cell(info, 0, 3, "C / B", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 3, na(C) ? "..." : str.tostring(C, format.mintick) + " / " + str.tostring(B, format.mintick), text_color = color.yellow, text_size = size.small)
+    table.cell(info, 0, 4, "Decider", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 4, na(decHi) ? "" : str.tostring(decHi, format.mintick) + " / " + str.tostring(decLo, format.mintick), text_color = clrDecider, text_size = size.small)
+    table.cell(info, 0, 5, "Target 1", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 5, na(upT1) ? "" : str.tostring(upT1, format.mintick) + " / " + str.tostring(dnT1, format.mintick), text_color = clrT1, text_size = size.small)
+    table.cell(info, 0, 6, "Target 2", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 6, na(upT2) ? "" : str.tostring(upT2, format.mintick) + " / " + str.tostring(dnT2, format.mintick), text_color = clrT2, text_size = size.small)
+    table.cell(info, 0, 7, "Target 3", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 7, na(upT3) ? "" : str.tostring(upT3, format.mintick) + " / " + str.tostring(dnT3, format.mintick), text_color = clrT3, text_size = size.small)
+    table.cell(info, 0, 8, "Target 4", text_color = color.gray, text_size = size.small)
+    table.cell(info, 1, 8, na(upT4) ? "" : str.tostring(upT4, format.mintick) + " / " + str.tostring(dnT4, format.mintick), text_color = clrT4, text_size = size.small)
