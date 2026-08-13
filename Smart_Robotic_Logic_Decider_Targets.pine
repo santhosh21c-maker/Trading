@@ -9,8 +9,8 @@
 //   Decider = C +/- 0.06*B
 //   Targets = C +/- 1.00, 1.54, 1.83, 2.08 * B
 //
-// 13 Aug CALL CE24400 example: H=148.33 L=114
-//   Decider 132.19/130.14  T2 157.60/104.73  T3 162.58/99.75  T4 166.87/95.46
+// 13 Aug CALL CE24400 vendor: H=148.33 L=114  Decider ~132.19/130.14
+// BUG: raw Daily series on NSE options gave wrong H/L e.g. 214/100 — use Chart TF session.
 //
 // SEGMENTS:
 //   INDIAN - prior-day FROZEN. Extend = line length only.
