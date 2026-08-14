@@ -1,0 +1,1577 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+//  SMARTFLOW GOLD SUITE  ·  XAUUSD                                       v4.1
+//  Cleaner presentation + QC fixes. Same 17 engines. Master Chart Mode.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//  CHART MODE (top of settings) — stops the "clumsy chart" problem
+//    Clean Chart   → engines SCORE only; chart shows BUY labels + dashboard
+//    Signal Focus  → recommended trading view (default): AVWAP, POC,
+//                    nearest high-quality FVGs, Sureshot sweeps, major rounds
+//    Full Study    → honour every engine's Draw toggle (research / markup)
+//    Custom        → Draw toggles only (ignore Chart Mode overlays)
+//
+//  QC FIXES vs v4.0
+//    • OB freshness now uses f_obAge (was a dead +2.0 constant)
+//    • E7 magnets no longer create boxes/labels when Draw is off
+//    • Chart-TF FVG uses f_isNew (stops re-add churn)
+//    • HTF bias / CPR use lookahead_off
+//    • Structure keeps opposite swing after BOS; CHoCH vs BOS draw split
+//    • Sweep: optional basic labels OFF by default (Sureshot only)
+//
+//  17 ENGINES — each has ▶ ENABLE + Draw. Tuning lives under each group.
+//  NO SELL SIGNAL — bear engines veto longs only.
+// ═══════════════════════════════════════════════════════════════════════════
+
+indicator("SmartFlow Gold Suite · XAUUSD", shorttitle = "SmartFlow Gold", overlay = true,
+     max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500, max_bars_back = 5000)
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GLOBAL + CHART MODE
+// ═══════════════════════════════════════════════════════════════════════════
+grp0 = "⚙  Global"
+
+chartMode = input.string("Signal Focus", "Chart Mode",
+     options = ["Clean Chart", "Signal Focus", "Full Study", "Custom"],
+     tooltip = "Clean Chart: score only + BUY/dashboard.\nSignal Focus: quiet trading view (recommended).\nFull Study / Custom: use per-engine Draw toggles.",
+     group = grp0)
+chartType = input.string("Auto-Detect", "Chart Type",
+     options = ["Auto-Detect", "Has Volume (XAUUSD / Futures)", "Index Spot (no volume)"],
+     tooltip = "XAUUSD has tick volume — leave on Auto-Detect.",
+     group = grp0)
+biasTf = input.timeframe("15", "HTF bias timeframe",
+     tooltip = "Shared by FVG scoring (E8) and signal engine (E16).",
+     group = grp0)
+showLevelTags = input.bool(true, "Right-edge level tags", group = grp0)
+
+// role: "none" never | "focus" Signal Focus+ | "study" Full/Custom only via engDraw
+f_show(bool engOn, bool engDraw, string role) =>
+    if not engOn
+        false
+    else if chartMode == "Clean Chart"
+        false
+    else if chartMode == "Signal Focus"
+        role == "focus"
+    else
+        // Full Study + Custom → per-engine Draw
+        engDraw
+
+atr    = ta.atr(14)
+atrAvg = ta.sma(atr, 20)
+avgVol20 = ta.sma(nz(volume, 1.0), 20)
+
+volOk  = not na(volume) and volume > 0
+effVol = volOk ? volume : 1.0
+var bool anyVol = false
+if volOk
+    anyVol := true
+
+indexMode = chartType == "Index Spot (no volume)" or (chartType == "Auto-Detect" and bar_index > 20 and not anyVol)
+
+dayChange   = ta.change(time("D")) != 0
+weekChange  = ta.change(time("W")) != 0
+monthChange = ta.change(time("M")) != 0
+
+f_sess() =>
+    hNY  = hour(time, "America/New_York")
+    hLon = hour(time, "Europe/London")
+    inNYh  = hNY  >= 8 and hNY  < 17
+    inLonh = hLon >= 8 and hLon < 17
+    inNYh and inLonh ? "London∩NY" : inNYh ? "NY" : inLonh ? "London" : "Asia"
+
+f_tier(float s) => s >= 8 ? "PEAK" : s >= 6.5 ? "HIGH" : s >= 5 ? "FAIR" : s >= 3.5 ? "SOFT" : "WEAK"
+
+[htfFast, htfSlow] = request.security(syminfo.tickerid, biasTf, [ta.ema(close, 9), ta.ema(close, 21)], lookahead = barmerge.lookahead_off)
+htfBull = htfFast > htfSlow
+htfBear = htfFast < htfSlow
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E1 · ORDER FLOW
+// ═══════════════════════════════════════════════════════════════════════════
+grpE1 = "E1 ·  Order Flow"
+e1On       = input.bool(true,  "▶  ENABLE Order Flow", group = grpE1)
+e1Draw     = input.bool(false, "     Draw Δ+ / Δ− tags", group = grpE1)
+e1ImbalMlt = input.float(2.0, "     Imbalance threshold (× avg |delta|)", minval = 1.0, step = 0.1, group = grpE1)
+e1CvdLen   = input.int(5, "     CVD slope lookback", minval = 2, maxval = 50, group = grpE1)
+e1Show = f_show(e1On, e1Draw, "study")
+
+chartSec = timeframe.in_seconds(timeframe.period)
+ltf      = chartSec <= 300 ? "1" : chartSec <= 3600 ? "5" : "60"
+deltaArr = request.security_lower_tf(syminfo.tickerid, ltf, close > open ? effVol : close < open ? -effVol : 0.0)
+fallbackDelta = close > open ? effVol : close < open ? -effVol : 0.0
+delta = array.size(deltaArr) > 0 ? array.sum(deltaArr) : fallbackDelta
+
+var float cvd = 0.0
+cvd += delta
+
+avgAbsDelta = ta.sma(math.abs(delta), 20)
+buyImbal  = e1On and delta >  avgAbsDelta * e1ImbalMlt
+sellImbal = e1On and delta < -avgAbsDelta * e1ImbalMlt
+cvdRising  = cvd > cvd[e1CvdLen]
+cvdFalling = cvd < cvd[e1CvdLen]
+
+if e1Show and buyImbal
+    label.new(bar_index, low, "Δ+", style = label.style_label_up,
+         color = color.new(color.green, 20), textcolor = color.white, size = size.tiny)
+if e1Show and sellImbal
+    label.new(bar_index, high, "Δ−", style = label.style_label_down,
+         color = color.new(color.red, 20), textcolor = color.white, size = size.tiny)
+
+e1Active = e1On and not indexMode
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E2 · ANCHORED VWAP
+// ═══════════════════════════════════════════════════════════════════════════
+grpE2 = "E2 ·  Anchored VWAP"
+e2On     = input.bool(true,  "▶  ENABLE Anchored VWAP", group = grpE2)
+e2Draw   = input.bool(true,  "     Plot the VWAP line", group = grpE2)
+e2Bands  = input.bool(false, "     Plot ±1σ bands", group = grpE2)
+e2Anchor = input.string("Session", "     Anchor", options = ["Session", "Week", "Month", "Custom Date"], group = grpE2)
+e2Time   = input.time(timestamp("2026-07-17T00:00:00+00:00"), "     Custom anchor date/time", group = grpE2)
+e2Show = f_show(e2On, e2Draw, "focus")
+e2ShowBands = e2Show and e2Bands and chartMode != "Signal Focus"
+
+customCross = not na(time[1]) and time[1] < e2Time and time >= e2Time
+newAnchor = e2Anchor == "Session" ? dayChange : e2Anchor == "Week" ? weekChange : e2Anchor == "Month" ? monthChange : customCross
+
+var float cumPV  = 0.0
+var float cumV   = 0.0
+var float cumPV2 = 0.0
+if barstate.isfirst or newAnchor
+    cumPV  := 0.0
+    cumV   := 0.0
+    cumPV2 := 0.0
+cumPV  += hlc3 * effVol
+cumV   += effVol
+cumPV2 += hlc3 * hlc3 * effVol
+
+avwap    = cumV > 0 ? cumPV / cumV : na
+avwapVar = cumV > 0 ? math.max(cumPV2 / cumV - avwap * avwap, 0.0) : na
+avwapSd  = math.sqrt(avwapVar)
+
+plot(e2Show ? avwap : na, "Anchored VWAP", color.fuchsia, 2)
+plot(e2ShowBands ? avwap + avwapSd : na, "AVWAP +1σ", color.new(color.fuchsia, 60), 1)
+plot(e2ShowBands ? avwap - avwapSd : na, "AVWAP −1σ", color.new(color.fuchsia, 60), 1)
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E3 · VOLUME PROFILE
+// ═══════════════════════════════════════════════════════════════════════════
+grpE3 = "E3 ·  Volume Profile"
+e3On    = input.bool(true,  "▶  ENABLE Volume Profile", group = grpE3)
+e3Draw  = input.bool(true,  "     Plot POC / VAH / VAL", group = grpE3)
+e3PocOnly = input.bool(true, "     Signal Focus: POC only (hide VAH/VAL)", group = grpE3)
+e3Hist  = input.bool(false, "     Draw histogram blocks", group = grpE3)
+e3Len   = input.int(150, "     Lookback (bars)", minval = 30, maxval = 500, group = grpE3)
+e3Rows  = input.int(24,  "     Profile rows", minval = 10, maxval = 32, group = grpE3)
+e3Width = input.int(30,  "     Histogram max width (bars)", minval = 10, maxval = 100, group = grpE3)
+e3VaPct = input.float(70, "     Value-area %", minval = 50, maxval = 90, step = 5, group = grpE3)
+e3Show = f_show(e3On, e3Draw, "focus")
+e3ShowVa = e3Show and not (chartMode == "Signal Focus" and e3PocOnly)
+e3ShowHist = f_show(e3On, e3Hist, "study")
+
+vpHi = ta.highest(high, e3Len)
+vpLo = ta.lowest(low, e3Len)
+
+var array<float> rowVol = array.new<float>()
+float poc = na
+float vah = na
+float val = na
+
+if e3On and vpHi > vpLo
+    array.clear(rowVol)
+    for r = 0 to e3Rows - 1
+        array.push(rowVol, 0.0)
+    stepP = (vpHi - vpLo) / e3Rows
+    for i = 0 to e3Len - 1
+        v  = (na(volume[i]) or volume[i] <= 0) ? 1.0 : volume[i]
+        px = (high[i] + low[i]) / 2
+        idx = int((px - vpLo) / stepP)
+        idx := math.min(math.max(idx, 0), e3Rows - 1)
+        array.set(rowVol, idx, array.get(rowVol, idx) + v)
+    pocIdx = 0
+    for r = 1 to e3Rows - 1
+        if array.get(rowVol, r) > array.get(rowVol, pocIdx)
+            pocIdx := r
+    poc := vpLo + (pocIdx + 0.5) * stepP
+    total = array.sum(rowVol)
+    va = array.get(rowVol, pocIdx)
+    up = pocIdx + 1
+    dn = pocIdx - 1
+    while va < total * (e3VaPct / 100.0) and (up < e3Rows or dn >= 0)
+        upV = up < e3Rows ? array.get(rowVol, up) : -1.0
+        dnV = dn >= 0     ? array.get(rowVol, dn) : -1.0
+        if upV >= dnV
+            va += upV
+            up += 1
+        else
+            va += dnV
+            dn -= 1
+    vah := vpLo + up * stepP
+    val := vpLo + (dn + 1) * stepP
+
+plot(e3Show ? poc : na, "POC", color.orange, 2, plot.style_circles)
+plot(e3ShowVa ? vah : na, "VAH", color.new(color.orange, 40), 1, plot.style_circles)
+plot(e3ShowVa ? val : na, "VAL", color.new(color.orange, 40), 1, plot.style_circles)
+
+var array<box> vpBoxes = array.new<box>()
+if barstate.islast
+    while array.size(vpBoxes) > 0
+        box.delete(array.pop(vpBoxes))
+    if e3ShowHist and vpHi > vpLo and array.size(rowVol) == e3Rows
+        stepH = (vpHi - vpLo) / e3Rows
+        maxV = 0.0
+        for r = 0 to e3Rows - 1
+            maxV := math.max(maxV, array.get(rowVol, r))
+        if maxV > 0
+            for r = 0 to e3Rows - 1
+                w = int(array.get(rowVol, r) / maxV * e3Width)
+                if w > 0
+                    yB = vpLo + r * stepH
+                    yT = yB + stepH
+                    inVA = yB >= val - stepH * 0.5 and yT <= vah + stepH * 0.5
+                    array.push(vpBoxes, box.new(bar_index + 2, yT, bar_index + 2 + w, yB,
+                         border_color = color.new(color.gray, 90),
+                         bgcolor = inVA ? color.new(color.blue, 70) : color.new(color.gray, 80)))
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E4 · MARKET STRUCTURE
+// ═══════════════════════════════════════════════════════════════════════════
+grpE4 = "E4 ·  Market Structure"
+e4On     = input.bool(true,  "▶  ENABLE Market Structure", group = grpE4)
+e4Bos    = input.bool(false, "     Draw BOS labels", tooltip = "OFF by default — biggest label spam on 5m.", group = grpE4)
+e4Choch  = input.bool(true,  "     Draw CHoCH labels only", group = grpE4)
+e4Swings = input.bool(false, "     Draw HH / HL / LH / LL tags", group = grpE4)
+e4PivLen = input.int(5, "     Swing strength (bars left/right)", minval = 2, maxval = 20, group = grpE4)
+e4ShowBos = f_show(e4On, e4Bos, "study")
+e4ShowChoch = f_show(e4On, e4Choch, "focus")
+e4ShowSw = f_show(e4On, e4Swings, "study")
+
+ph = ta.pivothigh(high, e4PivLen, e4PivLen)
+pl = ta.pivotlow(low,  e4PivLen, e4PivLen)
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var float prevSwingHigh = na
+var float prevSwingLow  = na
+var int   trendDir      = 0
+
+if not na(ph)
+    if e4ShowSw and not na(lastSwingHigh)
+        label.new(bar_index - e4PivLen, ph, ph > lastSwingHigh ? "HH" : "LH",
+             style = label.style_label_down, color = color.new(color.gray, 60),
+             textcolor = color.white, size = size.tiny)
+    prevSwingHigh := lastSwingHigh
+    lastSwingHigh := ph
+if not na(pl)
+    if e4ShowSw and not na(lastSwingLow)
+        label.new(bar_index - e4PivLen, pl, pl < lastSwingLow ? "LL" : "HL",
+             style = label.style_label_up, color = color.new(color.gray, 60),
+             textcolor = color.white, size = size.tiny)
+    prevSwingLow := lastSwingLow
+    lastSwingLow := pl
+
+bosUp = not na(lastSwingHigh) and close > lastSwingHigh
+bosDn = not na(lastSwingLow)  and close < lastSwingLow
+
+if bosUp
+    isChoch = trendDir == -1
+    if isChoch ? e4ShowChoch : e4ShowBos
+        label.new(bar_index, lastSwingHigh, isChoch ? "CHoCH ▲" : "BOS ▲",
+             style = label.style_label_down, color = color.new(color.teal, 20),
+             textcolor = color.white, size = size.tiny)
+    trendDir := 1
+    // Keep opposite swing; only clear broken high (restore from prev if needed)
+    lastSwingHigh := na
+if bosDn
+    isChoch = trendDir == 1
+    if isChoch ? e4ShowChoch : e4ShowBos
+        label.new(bar_index, lastSwingLow, isChoch ? "CHoCH ▼" : "BOS ▼",
+             style = label.style_label_up, color = color.new(color.maroon, 20),
+             textcolor = color.white, size = size.tiny)
+    trendDir := -1
+    lastSwingLow := na
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E5 · ORDER BLOCKS
+// ═══════════════════════════════════════════════════════════════════════════
+grpE5 = "E5 ·  Order Blocks"
+e5On    = input.bool(true,  "▶  ENABLE Order Blocks", group = grpE5)
+e5Draw  = input.bool(false, "     Draw blocks", group = grpE5)
+e5Swing = input.int(7, "     Swing length", minval = 3, maxval = 20, group = grpE5)
+e5Look  = input.int(20, "     Lookback for the OB candle", minval = 5, maxval = 50, group = grpE5)
+e5Disp  = input.float(1.3, "     Displacement (× OB candle range)", minval = 0.5, maxval = 5, step = 0.1, group = grpE5)
+e5Max   = input.int(3, "     Max blocks per side", minval = 1, maxval = 10, group = grpE5)
+e5MinS  = input.float(5.0, "     Hide blocks weaker than (/10)", minval = 0, maxval = 10, step = 0.5, group = grpE5)
+e5Show = f_show(e5On, e5Draw, "study")
+
+type OB
+    box    bx
+    label  lb
+    float  top
+    float  bot
+    bool   bull
+    string sess
+    int    born
+    float  str
+
+var array<OB> obBulls = array.new<OB>()
+var array<OB> obBears = array.new<OB>()
+
+obPh = ta.pivothigh(high, e5Swing, e5Swing)
+obPl = ta.pivotlow(low,  e5Swing, e5Swing)
+
+f_obAge(int born) =>
+    age = bar_index - born
+    age < 50 ? 2.0 : age < 100 ? 1.5 : age < 200 ? 1.0 : 0.5
+
+f_obStrength(float disp, float height, string sess, int born) =>
+    ds = atr > 0 ? disp / atr : 1.0
+    d  = ds >= 3 ? 3.0 : ds >= 2 ? 2.5 : ds >= 1.5 ? 2.0 : ds >= 1 ? 1.5 : 0.8
+    s  = sess == "London∩NY" ? 2.0 : (sess == "London" or sess == "NY") ? 1.6 : sess == "Asia" ? 0.8 : 0.4
+    hz = atr > 0 ? math.min(height / (atr * 1.2), 1.0) * 3.0 : 1.5
+    fr = f_obAge(born)
+    math.min(d + s + fr + hz, 10.0)
+
+f_obMake(bool isBull, float cTop, float cBot, int atBar, string sess) =>
+    disp = isBull ? close - cBot : cTop - close
+    st   = f_obStrength(math.abs(disp), cTop - cBot, sess, bar_index)
+    if st >= e5MinS
+        c = isBull ? color.green : color.red
+        box   bx = na
+        label lb = na
+        if e5Show
+            bx := box.new(atBar, cTop, bar_index + 20, cBot, border_color = color.new(c, 30), bgcolor = color.new(c, 88), border_width = 1, extend = extend.right)
+            lb := label.new(bar_index + 3, (cTop + cBot) / 2, (isBull ? "Bull OB " : "Bear OB ") + str.tostring(st, "#.#") + "/10 · " + sess, color = color.new(c, 100), textcolor = color.new(c, 0), style = label.style_label_left, size = size.tiny)
+        array.push(isBull ? obBulls : obBears, OB.new(bx, lb, cTop, cBot, isBull, sess, bar_index, st))
+
+if e5On and barstate.isconfirmed
+    if not na(obPl)
+        bool found = false
+        for i = e5Swing + 1 to e5Swing + e5Look
+            if not found and close[i] < open[i]
+                rng = high[i] - low[i]
+                if rng > 0 and (obPl - low[i]) > rng * e5Disp
+                    f_obMake(true, high[i], low[i], bar_index - i, f_sess())
+                    found := true
+    if not na(obPh)
+        bool found = false
+        for i = e5Swing + 1 to e5Swing + e5Look
+            if not found and close[i] > open[i]
+                rng = high[i] - low[i]
+                if rng > 0 and (high[i] - obPh) > rng * e5Disp
+                    f_obMake(false, high[i], low[i], bar_index - i, f_sess())
+                    found := true
+
+f_obClean(array<OB> arr) =>
+    if array.size(arr) > 0
+        for i = array.size(arr) - 1 to 0
+            o = array.get(arr, i)
+            // Refresh label score with age decay; do not delete for soft scores
+            o.str := f_obStrength(math.abs(o.bull ? close - o.bot : o.top - close), o.top - o.bot, o.sess, o.born)
+            dead = barstate.isconfirmed and (o.bull ? close < o.bot : close > o.top)
+            if dead or not e5On
+                box.delete(o.bx)
+                label.delete(o.lb)
+                array.remove(arr, i)
+    while array.size(arr) > e5Max
+        o = array.shift(arr)
+        box.delete(o.bx)
+        label.delete(o.lb)
+
+f_obClean(obBulls)
+f_obClean(obBears)
+
+bool inBullOB = false
+bool inBearOB = false
+float nearBullOB = na
+float nearBearOB = na
+if e5On and array.size(obBulls) > 0
+    for i = 0 to array.size(obBulls) - 1
+        o = array.get(obBulls, i)
+        if e5Show and not na(o.lb)
+            label.set_x(o.lb, bar_index + 3)
+            label.set_text(o.lb, "Bull OB " + str.tostring(o.str, "#.#") + "/10 · " + o.sess)
+        if low <= o.top and close >= o.bot
+            inBullOB := true
+        if na(nearBullOB) or math.abs(close - o.top) < math.abs(close - nearBullOB)
+            nearBullOB := o.top
+if e5On and array.size(obBears) > 0
+    for i = 0 to array.size(obBears) - 1
+        o = array.get(obBears, i)
+        if e5Show and not na(o.lb)
+            label.set_x(o.lb, bar_index + 3)
+            label.set_text(o.lb, "Bear OB " + str.tostring(o.str, "#.#") + "/10 · " + o.sess)
+        if high >= o.bot and close <= o.top
+            inBearOB := true
+        if na(nearBearOB) or math.abs(close - o.bot) < math.abs(close - nearBearOB)
+            nearBearOB := o.bot
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E6 · SUPPLY & DEMAND
+// ═══════════════════════════════════════════════════════════════════════════
+grpE6 = "E6 ·  Supply & Demand (LIQ shelves)"
+e6On   = input.bool(true,  "▶  ENABLE Supply & Demand", group = grpE6)
+e6Draw = input.bool(false, "     Draw shelves", group = grpE6)
+e6Look = input.int(300, "     Lookback (bars)", minval = 50, maxval = 2000, group = grpE6)
+e6Piv  = input.int(10,  "     Swing length", minval = 3, maxval = 50, group = grpE6)
+e6N    = input.int(4,   "     Shelves to show", minval = 1, maxval = 8, group = grpE6)
+e6H    = input.float(1.3, "     Shelf height (× ATR)", minval = 0.3, maxval = 5, step = 0.1, group = grpE6)
+e6Show = f_show(e6On, e6Draw, "study")
+
+sdPh = ta.pivothigh(high, e6Piv, e6Piv)
+sdPl = ta.pivotlow(low,  e6Piv, e6Piv)
+var array<float> sdPrice = array.new<float>()
+var array<int>   sdBar   = array.new<int>()
+var array<bool>  sdIsHi  = array.new<bool>()
+if not na(sdPh)
+    array.push(sdPrice, sdPh)
+    array.push(sdBar, bar_index - e6Piv)
+    array.push(sdIsHi, true)
+if not na(sdPl)
+    array.push(sdPrice, sdPl)
+    array.push(sdBar, bar_index - e6Piv)
+    array.push(sdIsHi, false)
+while array.size(sdBar) > 0 and (bar_index - array.get(sdBar, 0)) > e6Look
+    array.shift(sdBar)
+    array.shift(sdPrice)
+    array.shift(sdIsHi)
+
+var array<box>   sdBxs = array.new<box>()
+var array<line>  sdLns = array.new<line>()
+var array<label> sdLbs = array.new<label>()
+var float sdBuyW  = 0.0
+var float sdSellW = 0.0
+var array<float> sdZTop = array.new<float>()
+var array<float> sdZBot = array.new<float>()
+var array<bool>  sdZSup = array.new<bool>()
+
+if barstate.islast
+    while array.size(sdBxs) > 0
+        box.delete(array.pop(sdBxs))
+    while array.size(sdLns) > 0
+        line.delete(array.pop(sdLns))
+    while array.size(sdLbs) > 0
+        label.delete(array.pop(sdLbs))
+    sdBuyW  := 0.0
+    sdSellW := 0.0
+    array.clear(sdZTop)
+    array.clear(sdZBot)
+    array.clear(sdZSup)
+    if e6On
+        nS = array.size(sdPrice)
+        h  = atr * e6H
+        maxV = 0.0
+        zV = array.new<float>()
+        zB = array.new<float>()
+        zT = array.new<int>()
+        if nS > 0 and h > 0
+            startI = math.max(0, nS - e6N)
+            for idx = startI to nS - 1
+                sp  = array.get(sdPrice, idx)
+                zHi = sp + h / 2
+                zLo = sp - h / 2
+                buyV = 0.0
+                sellV = 0.0
+                touches = 0
+                prevIn = false
+                for i = e6Look - 1 to 0
+                    if bar_index - i >= 0
+                        pp = (high[i] + low[i] + close[i]) / 3
+                        inZ = pp >= zLo and pp <= zHi
+                        if inZ
+                            if close[i] >= open[i]
+                                buyV += nz(volume[i], 1.0)
+                            else
+                                sellV += nz(volume[i], 1.0)
+                            if not prevIn
+                                touches += 1
+                        prevIn := inZ
+                tot = buyV + sellV
+                array.push(zV, tot)
+                array.push(zB, tot > 0 ? buyV / tot * 100 : 50)
+                array.push(zT, touches)
+                maxV := math.max(maxV, tot)
+            k = 0
+            for idx = startI to nS - 1
+                sp  = array.get(sdPrice, idx)
+                sb  = array.get(sdBar, idx)
+                sup = array.get(sdIsHi, idx)
+                zHi = sp + h / 2
+                zLo = sp - h / 2
+                score = maxV > 0 ? math.round(array.get(zV, k) / maxV * 100) : 0
+                buyP  = array.get(zB, k)
+                tch   = array.get(zT, k)
+                if sup
+                    sdSellW += array.get(zV, k)
+                else
+                    sdBuyW  += array.get(zV, k)
+                array.push(sdZTop, zHi)
+                array.push(sdZBot, zLo)
+                array.push(sdZSup, sup)
+                if e6Show
+                    c  = sup ? #E23E7C : #17C3B2
+                    x1 = math.max(bar_index - e6Look, sb)
+                    array.push(sdBxs, box.new(x1, zHi, bar_index + 4, zLo, border_color = color.new(c, 100), bgcolor = color.new(c, 84)))
+                    edgeY = sup ? zLo : zHi
+                    array.push(sdLns, line.new(x1, edgeY, bar_index + 4, edgeY, color = color.new(c, 10), width = 2))
+                    tag = tch <= 1 ? "FRESH" : "TESTED " + str.tostring(tch) + "x"
+                    array.push(sdLbs, label.new(bar_index + 4, sup ? zHi : zLo,
+                         "LIQ " + str.tostring(score) + " · ▲" + str.tostring(math.round(buyP)) + "% ▼" + str.tostring(math.round(100 - buyP)) + "% · " + tag,
+                         style = sup ? label.style_label_lower_left : label.style_label_upper_left,
+                         color = color.new(sup ? #6E1B3E : #0D5D55, 12), textcolor = color.white, size = size.tiny))
+                k += 1
+
+sdBiasBull = e6On and sdBuyW > sdSellW
+sdBiasBear = e6On and sdSellW > sdBuyW
+sdBiasTxt  = sdBuyW + sdSellW > 0 ? (sdBuyW >= sdSellW ? "▲ BUY-side" : "▼ SELL-side") : "—"
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E7 · LIQUIDITY OUTLOOK
+// ═══════════════════════════════════════════════════════════════════════════
+grpE7 = "E7 ·  Liquidity Outlook (magnets)"
+e7On    = input.bool(true,  "▶  ENABLE Liquidity Outlook", group = grpE7)
+e7Draw  = input.bool(false, "     Draw magnets", group = grpE7)
+e7Max   = input.int(12, "     Max live magnets", minval = 4, maxval = 40, group = grpE7)
+e7PivL  = input.int(12, "     Swing left bars", minval = 1, maxval = 100, group = grpE7)
+e7PivR  = input.int(4,  "     Swing right bars", minval = 1, maxval = 50, group = grpE7)
+e7PoolH = input.float(0.45, "     Stop-pool height (× ATR)", minval = 0.05, maxval = 5, step = 0.05, group = grpE7)
+e7GapA  = input.float(0.05, "     Min gap size (× ATR)", minval = 0, step = 0.01, group = grpE7)
+e7MinSc = input.float(3.0, "     Hide magnets below score", minval = 0, maxval = 10, step = 0.5, group = grpE7)
+e7Rails = input.bool(false, "     Nearest-magnet rails", group = grpE7)
+e7Show = f_show(e7On, e7Draw, "study")
+e7ShowRails = e7Show and e7Rails
+
+type Magnet
+    box   bx
+    label tag
+    int   kind
+    int   dir
+    float top
+    float bot
+    float top0
+    float bot0
+    int   born
+    int   lastBar
+    int   tests
+    float volAbs
+    int   conf
+    int   phase
+    float pen
+    bool  inside
+    float score
+
+var array<Magnet> loMags = array.new<Magnet>()
+loAtr  = nz(ta.atr(200), high - low)
+loVolB = nz(ta.sma(volume, 50), 0.0)
+loLegV = math.sum(nz(volume, 1.0), e7PivL + e7PivR)
+loGapV = math.sum(nz(volume, 1.0), 2)
+
+f_loScore(Magnet m) =>
+    h     = m.top0 - m.bot0
+    sizeF = loAtr > 0 ? math.min(h / (loAtr * 1.2), 1.0) : 0.0
+    vB    = loVolB * (e7PivL + e7PivR)
+    volF  = vB > 0 ? math.min(m.volAbs / (vB * 1.4), 1.0) : 0.0
+    testF = math.min(m.tests / 3.0, 1.0)
+    confF = math.min((m.conf - 1) / 2.0, 1.0)
+    dist  = math.abs(math.avg(m.top0, m.bot0) - close)
+    proxF = loAtr > 0 ? math.max(1.0 - dist / (loAtr * 6.0), 0.0) : 0.0
+    raw   = volF * 0.25 + sizeF * 0.20 + testF * 0.20 + confF * 0.20 + proxF * 0.15
+    idle  = bar_index - m.lastBar
+    decay = math.max(1.0 - 0.4 * math.min(idle / 400.0, 1.0), 0.6)
+    math.min(math.max(raw * 10.0 * decay, 0.0), 10.0)
+
+f_loSpawn(int kind, int dir, float top, float bot, int bBar, float vAbs) =>
+    merged = false
+    if array.size(loMags) > 0
+        for i = array.size(loMags) - 1 to 0
+            e = array.get(loMags, i)
+            ov = math.min(e.top0, top) - math.max(e.bot0, bot)
+            minH = math.min(e.top0 - e.bot0, top - bot)
+            if e.phase != 2 and e.dir == dir and minH > 0 and ov > 0 and ov / minH >= 0.15
+                e.top0 := math.max(e.top0, top)
+                e.bot0 := math.min(e.bot0, bot)
+                e.top  := math.max(e.top, top)
+                e.bot  := math.min(e.bot, bot)
+                e.volAbs += vAbs
+                e.conf += 1
+                e.lastBar := bBar
+                merged := true
+                break
+    if not merged
+        m = Magnet.new()
+        m.kind := kind
+        m.dir  := dir
+        m.top  := top
+        m.bot  := bot
+        m.top0 := top
+        m.bot0 := bot
+        m.born := bBar
+        m.lastBar := bBar
+        m.volAbs := vAbs
+        m.conf := 1
+        // QC fix: do not allocate drawings until Draw is effective
+        m.bx  := na
+        m.tag := na
+        array.push(loMags, m)
+        while array.size(loMags) > e7Max
+            v = 0
+            fnd = false
+            for i = 0 to array.size(loMags) - 1
+                if array.get(loMags, i).phase == 2
+                    v := i
+                    fnd := true
+                    break
+            o = array.get(loMags, fnd ? v : 0)
+            box.delete(o.bx)
+            label.delete(o.tag)
+            array.remove(loMags, fnd ? v : 0)
+
+loGapU = bar_index > 2 and low[1] > high[2] and (low[1] - high[2]) >= loAtr * e7GapA
+loGapD = bar_index > 2 and high[1] < low[2] and (low[2] - high[1]) >= loAtr * e7GapA
+loPh = ta.pivothigh(high, e7PivL, e7PivR)
+loPl = ta.pivotlow(low,  e7PivL, e7PivR)
+
+if e7On and barstate.isconfirmed
+    if loGapU
+        f_loSpawn(0, -1, low[1], high[2], bar_index - 1, loGapV)
+    if loGapD
+        f_loSpawn(0, 1, low[2], high[1], bar_index - 1, loGapV)
+    if not na(loPh)
+        base = loPh + loAtr * 0.03
+        f_loSpawn(1, 1, base + loAtr * e7PoolH, base, bar_index - e7PivR, loLegV)
+    if not na(loPl)
+        base = loPl - loAtr * 0.03
+        f_loSpawn(1, -1, base, base - loAtr * e7PoolH, bar_index - e7PivR, loLegV)
+
+if barstate.isconfirmed and array.size(loMags) > 0
+    for i = array.size(loMags) - 1 to 0
+        m = array.get(loMags, i)
+        if not e7On
+            box.delete(m.bx)
+            label.delete(m.tag)
+            array.remove(loMags, i)
+            continue
+        if m.phase != 2
+            h = m.top0 - m.bot0
+            touching = m.dir > 0 ? high >= m.bot0 : low <= m.top0
+            if touching
+                p = h > 0 ? (m.dir > 0 ? math.min((high - m.bot0) / h, 1.0) : math.min((m.top0 - low) / h, 1.0)) : 1.0
+                if p > m.pen
+                    m.pen := p
+                    if m.dir > 0
+                        m.bot := math.min(m.bot0 + p * h, m.top0)
+                    else
+                        m.top := math.max(m.top0 - p * h, m.bot0)
+                if not m.inside
+                    m.tests += 1
+                m.inside := true
+                m.lastBar := bar_index
+                m.phase := (m.dir > 0 ? high >= m.top0 : low <= m.bot0) ? 2 : 1
+            else
+                m.inside := false
+            m.score := f_loScore(m)
+
+var line loRailU = na
+var line loRailD = na
+float loNearUp = na
+float loNearDn = na
+float loMassUp = 0.0
+float loMassDn = 0.0
+if array.size(loMags) > 0
+    for i = 0 to array.size(loMags) - 1
+        m = array.get(loMags, i)
+        c = m.dir > 0 ? #e957d6 : #22d3a6
+        vis = e7Show and (m.score >= e7MinSc or m.phase == 2)
+        if vis and na(m.bx)
+            m.bx := box.new(m.born, m.top, m.born, m.bot, border_width = 1, border_style = m.kind == 0 ? line.style_dashed : line.style_solid, bgcolor = na, border_color = na)
+            m.tag := label.new(m.born, math.avg(m.top, m.bot), "", style = label.style_label_left, color = na, textcolor = na, size = size.tiny)
+        if not vis and not na(m.bx)
+            box.set_bgcolor(m.bx, na)
+            box.set_border_color(m.bx, na)
+            label.set_text(m.tag, "")
+            label.set_textcolor(m.tag, na)
+        rEdge = m.phase == 2 ? math.max(m.lastBar, m.born) : bar_index + 14
+        if not na(m.bx)
+            box.set_lefttop(m.bx, m.born, m.top)
+            box.set_rightbottom(m.bx, rEdge, m.bot)
+            box.set_bgcolor(m.bx, vis ? color.new(c, m.phase == 2 ? 93 : 86) : na)
+            box.set_border_color(m.bx, vis and m.phase != 2 ? color.new(c, 40) : na)
+            stTxt = m.phase == 2 ? (m.kind == 0 ? "FILLED" : "SWEPT") : m.phase == 1 ? "EATEN " + str.tostring(m.pen * 100, "#") + "%" : ""
+            label.set_xy(m.tag, rEdge, math.avg(m.top0, m.bot0))
+            label.set_text(m.tag, vis ? (m.kind == 0 ? "IMBALANCE " : "STOP POOL ") + (m.dir > 0 ? "▲" : "▼") + (m.conf > 1 ? " ×" + str.tostring(m.conf) : "") + " · " + str.tostring(m.score, "#.0") + "/10 " + stTxt : "")
+            label.set_textcolor(m.tag, vis ? (m.phase == 2 ? color.new(c, 45) : c) : na)
+        if e7On and m.phase != 2 and m.score >= e7MinSc
+            mid = math.avg(m.top0, m.bot0)
+            if m.dir > 0
+                loMassUp += m.score
+                if na(loNearUp) or mid < loNearUp
+                    loNearUp := mid
+            else
+                loMassDn += m.score
+                if na(loNearDn) or mid > loNearDn
+                    loNearDn := mid
+
+if barstate.islast
+    if na(loRailU)
+        loRailU := line.new(bar_index - 1, close, bar_index, close, extend = extend.right, color = na, style = line.style_dashed)
+        loRailD := line.new(bar_index - 1, close, bar_index, close, extend = extend.right, color = na, style = line.style_dashed)
+    line.set_xy1(loRailU, bar_index - 1, nz(loNearUp, close))
+    line.set_xy2(loRailU, bar_index, nz(loNearUp, close))
+    line.set_color(loRailU, e7ShowRails and not na(loNearUp) ? color.new(#e957d6, 55) : na)
+    line.set_xy1(loRailD, bar_index - 1, nz(loNearDn, close))
+    line.set_xy2(loRailD, bar_index, nz(loNearDn, close))
+    line.set_color(loRailD, e7ShowRails and not na(loNearDn) ? color.new(#22d3a6, 55) : na)
+
+loPull    = loMassUp + loMassDn > 0 ? (loMassUp / (loMassUp + loMassDn) - 0.5) * 200 : 0.0
+loPullTxt = math.abs(loPull) < 8 ? "BALANCED" : loPull > 0 ? "▲ UPSIDE PULL" : "▼ DOWNSIDE PULL"
+loBull    = e7On and loPull > 8
+loBear    = e7On and loPull < -8
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E8 · FAIR VALUE GAPS
+// ═══════════════════════════════════════════════════════════════════════════
+grpE8 = "E8 ·  Fair Value Gaps (multi-timeframe)"
+e8On   = input.bool(true, "▶  ENABLE FVG Engine", group = grpE8)
+e8Draw = input.bool(true, "     Draw zones", group = grpE8)
+
+e8UseD   = input.bool(true, "Bias tier 1", inline = "f1", group = grpE8)
+e8TfD    = input.timeframe("D", "", inline = "f1", group = grpE8)
+e8UseH4  = input.bool(true, "Bias tier 2", inline = "f2", group = grpE8)
+e8TfH4   = input.timeframe("240", "", inline = "f2", group = grpE8)
+e8UseH1  = input.bool(true, "Entry tier 1", inline = "f3", group = grpE8)
+e8TfH1   = input.timeframe("60", "", inline = "f3", group = grpE8)
+e8UseM15 = input.bool(true, "Entry tier 2", inline = "f4", group = grpE8)
+e8TfM15  = input.timeframe("15", "", inline = "f4", group = grpE8)
+e8UseCh  = input.bool(false, "Entry tier 3 · chart timeframe", group = grpE8)
+
+e8MinAtr   = input.float(0.30, "     Min gap size (× TF ATR)", minval = 0.0, step = 0.05, group = grpE8)
+e8MinScore = input.float(6.0, "     Min quality score to draw", minval = 0.0, maxval = 10.0, step = 0.5, group = grpE8)
+e8Density  = input.string("1 per side", "     Max zones on screen",
+     options = ["1 per side", "2 per side", "3 per side", "5 per side", "All live zones"], group = grpE8)
+e8ShowCe   = input.bool(false, "     Draw 50% midline", group = grpE8)
+e8ShowLbl  = input.bool(true,  "     Label zones", group = grpE8)
+e8Extend   = input.int(20, "     Extend zones right (bars)", minval = 5, maxval = 200, group = grpE8)
+e8ConfMin  = input.float(6.0, "     Min score for confluence", minval = 0.0, maxval = 10.0, step = 0.5, group = grpE8)
+e8Norm     = input.bool(false, "     Normalise height", group = grpE8)
+e8NormH    = input.float(0.6, "     …normalised height (× ATR)", minval = 0.1, maxval = 3.0, step = 0.05, group = grpE8)
+e8MinH     = input.float(0.15, "     Minimum visual height (× ATR)", minval = 0.0, maxval = 1.0, step = 0.05, group = grpE8)
+e8Show = f_show(e8On, e8Draw, "focus")
+
+type FVG
+    float  top
+    float  bot
+    bool   bull
+    string tfName
+    float  tierPts
+    float  flowQ
+    int    tfCount
+    int    startBar
+    int    tests
+    bool   inside
+
+var array<FVG> zones = array.new<FVG>()
+
+f_buyVol(float h, float l, float c, float v) => (h - l) > 0 ? v * (c - l) / (h - l) : v * 0.5
+
+f_fvgSrc() =>
+    atrv = ta.atr(14)[1]
+    avgV = ta.sma(nz(volume, 1.0), 50)[1]
+    bg   = low[1] > high[3]
+    sg   = high[1] < low[3]
+    bTop = low[1]
+    bBot = high[3]
+    sTop = low[3]
+    sBot = high[1]
+    v1 = nz(volume[1], 1.0)
+    v2 = nz(volume[2], 1.0)
+    v3 = nz(volume[3], 1.0)
+    buy = f_buyVol(high[1], low[1], close[1], v1) + f_buyVol(high[2], low[2], close[2], v2) + f_buyVol(high[3], low[3], close[3], v3)
+    tot = v1 + v2 + v3
+    dlt = 2 * buy - tot
+    rvol = avgV > 0 ? math.min(tot / (avgV * 6.0), 1.0) : 0.0
+    dom  = math.min(math.abs(dlt) / math.max(tot, 1.0), 1.0)
+    aB = tot > 0 ? math.min(math.max( dlt / tot, 0.0), 1.0) : 0.0
+    aS = tot > 0 ? math.min(math.max(-dlt / tot, 0.0), 1.0) : 0.0
+    zB = math.min((bTop - bBot) / math.max(atrv * 1.5, 1e-9), 1.0)
+    zS = math.min((sTop - sBot) / math.max(atrv * 1.5, 1e-9), 1.0)
+    qB = zB * 0.35 + aB * 0.30 + rvol * 0.20 + dom * 0.15
+    qS = zS * 0.35 + aS * 0.30 + rvol * 0.20 + dom * 0.15
+    [bg, bTop, bBot, qB, sg, sTop, sBot, qS, atrv]
+
+[dBg, dBt, dBb, dQb, dSg, dSt, dSb, dQs, dAtr] = request.security(syminfo.tickerid, e8TfD,   f_fvgSrc(), lookahead = barmerge.lookahead_off)
+[hBg, hBt, hBb, hQb, hSg, hSt, hSb, hQs, hAtr] = request.security(syminfo.tickerid, e8TfH4,  f_fvgSrc(), lookahead = barmerge.lookahead_off)
+[oBg, oBt, oBb, oQb, oSg, oSt, oSb, oQs, oAtr] = request.security(syminfo.tickerid, e8TfH1,  f_fvgSrc(), lookahead = barmerge.lookahead_off)
+[mBg, mBt, mBb, mQb, mSg, mSt, mSb, mQs, mAtr] = request.security(syminfo.tickerid, e8TfM15, f_fvgSrc(), lookahead = barmerge.lookahead_off)
+[cBg, cBt, cBb, cQb, cSg, cSt, cSb, cQs, cAtr] = f_fvgSrc()
+
+f_addZone(bool cond, bool bull, float top, float bot, float tfAtr, string tfName, float tierPts, float flowQ) =>
+    if e8On and cond and not na(top) and not na(bot) and top > bot and not na(tfAtr) and tfAtr > 0
+        if (top - bot) >= tfAtr * e8MinAtr
+            bool merged = false
+            if array.size(zones) > 0
+                for i = 0 to array.size(zones) - 1
+                    z = array.get(zones, i)
+                    tol = atr * 0.3
+                    if z.bull == bull and top >= z.bot - tol and bot <= z.top + tol
+                        z.top     := math.max(z.top, top)
+                        z.bot     := math.min(z.bot, bot)
+                        z.tierPts := math.max(z.tierPts, tierPts)
+                        z.flowQ   := math.max(z.flowQ, flowQ)
+                        if not str.contains(z.tfName, tfName)
+                            z.tfName := z.tfName + "·" + tfName
+                            z.tfCount += 1
+                        merged := true
+                        break
+            if not merged
+                array.push(zones, FVG.new(top, bot, bull, tfName, tierPts, flowQ, 1, bar_index, 0, false))
+
+f_isNew(bool g, float t, float b) =>
+    g and (not g[1] or t != t[1] or b != b[1])
+
+if e8On and barstate.isconfirmed
+    if e8UseD
+        f_addZone(f_isNew(dBg, dBt, dBb), true,  dBt, dBb, dAtr, "D",   3.0, dQb)
+        f_addZone(f_isNew(dSg, dSt, dSb), false, dSt, dSb, dAtr, "D",   3.0, dQs)
+    if e8UseH4
+        f_addZone(f_isNew(hBg, hBt, hBb), true,  hBt, hBb, hAtr, "4H",  2.5, hQb)
+        f_addZone(f_isNew(hSg, hSt, hSb), false, hSt, hSb, hAtr, "4H",  2.5, hQs)
+    if e8UseH1
+        f_addZone(f_isNew(oBg, oBt, oBb), true,  oBt, oBb, oAtr, "1H",  2.0, oQb)
+        f_addZone(f_isNew(oSg, oSt, oSb), false, oSt, oSb, oAtr, "1H",  2.0, oQs)
+    if e8UseM15
+        f_addZone(f_isNew(mBg, mBt, mBb), true,  mBt, mBb, mAtr, "15m", 1.5, mQb)
+        f_addZone(f_isNew(mSg, mSt, mSb), false, mSt, mSb, mAtr, "15m", 1.5, mQs)
+    if e8UseCh
+        // QC fix: was adding every bar while gap exists
+        f_addZone(f_isNew(cBg, cBt, cBb), true,  cBt, cBb, cAtr, "TF", 1.0, cQb)
+        f_addZone(f_isNew(cSg, cSt, cSb), false, cSt, cSb, cAtr, "TF", 1.0, cQs)
+
+f_fvgScore(FVG z) =>
+    freshPts = z.tests == 0 ? 2.0 : z.tests == 1 ? 1.0 : 0.0
+    biasPts  = (z.bull and htfBull) or (not z.bull and htfBear) ? 1.0 : 0.0
+    confPts  = z.tfCount > 1 ? 0.6 : 0.0
+    math.min(10.0, z.tierPts + z.flowQ * 4.0 + freshPts + biasPts + confPts)
+
+var int lastBullFVGTouch = -9999
+var int lastBearFVGTouch = -9999
+
+if e8On and array.size(zones) > 0
+    for i = array.size(zones) - 1 to 0
+        z = array.get(zones, i)
+        mid = (z.top + z.bot) / 2
+        nowInside = low <= z.top and high >= z.bot
+        if nowInside and not z.inside
+            z.tests += 1
+        z.inside := nowInside
+        if nowInside and f_fvgScore(z) >= e8ConfMin
+            if z.bull
+                lastBullFVGTouch := bar_index
+            else
+                lastBearFVGTouch := bar_index
+        dead = z.bull ? close < mid : close > mid
+        if dead
+            array.remove(zones, i)
+
+if array.size(zones) > 14
+    farI = 0
+    farD = 0.0
+    for i = 0 to array.size(zones) - 1
+        z = array.get(zones, i)
+        d = math.abs(close - (z.top + z.bot) / 2)
+        if d > farD
+            farD := d
+            farI := i
+    array.remove(zones, farI)
+
+fvgMaxSide = e8Density == "1 per side" ? 1 : e8Density == "2 per side" ? 2 : e8Density == "3 per side" ? 3 : e8Density == "5 per side" ? 5 : 99
+// Signal Focus forces 1 per side regardless of density setting
+fvgMaxEff = chartMode == "Signal Focus" ? 1 : fvgMaxSide
+
+var array<box>   fvgBoxes = array.new<box>()
+var array<line>  fvgLines = array.new<line>()
+var array<label> fvgLabs  = array.new<label>()
+
+if barstate.islast
+    while array.size(fvgBoxes) > 0
+        box.delete(array.pop(fvgBoxes))
+    while array.size(fvgLines) > 0
+        line.delete(array.pop(fvgLines))
+    while array.size(fvgLabs) > 0
+        label.delete(array.pop(fvgLabs))
+    if e8Show and array.size(zones) > 0
+        drawnBull = 0
+        drawnBear = 0
+        used = array.new<bool>(array.size(zones), false)
+        for pass = 0 to array.size(zones) - 1
+            bestI = -1
+            bestD = 1e20
+            for i = 0 to array.size(zones) - 1
+                if not array.get(used, i)
+                    z = array.get(zones, i)
+                    d = math.abs(close - (z.top + z.bot) / 2)
+                    if d < bestD
+                        bestD := d
+                        bestI := i
+            if bestI >= 0
+                array.set(used, bestI, true)
+                z  = array.get(zones, bestI)
+                sc = f_fvgScore(z)
+                room = z.bull ? drawnBull < fvgMaxEff : drawnBear < fvgMaxEff
+                minSc = chartMode == "Signal Focus" ? math.max(e8MinScore, 6.0) : e8MinScore
+                if room and sc >= minSc
+                    if z.bull
+                        drawnBull += 1
+                    else
+                        drawnBear += 1
+                    mid = (z.top + z.bot) / 2
+                    float dTop = z.top
+                    float dBot = z.bot
+                    if e8Norm
+                        dTop := mid + atr * e8NormH / 2
+                        dBot := mid - atr * e8NormH / 2
+                    else if (z.top - z.bot) < atr * e8MinH
+                        dTop := mid + atr * e8MinH / 2
+                        dBot := mid - atr * e8MinH / 2
+                    fill = int(math.max(75, 94 - sc * 2.0))
+                    bc = z.bull ? color.new(color.teal, fill) : color.new(color.red, fill)
+                    bd = z.bull ? color.new(color.teal, 50)   : color.new(color.red, 50)
+                    lft = math.max(z.startBar, bar_index - 480)
+                    array.push(fvgBoxes, box.new(lft, dTop, bar_index + e8Extend, dBot,
+                         border_color = bd, border_width = 1, bgcolor = bc))
+                    if e8ShowCe and chartMode != "Signal Focus"
+                        array.push(fvgLines, line.new(lft, mid, bar_index + e8Extend, mid,
+                             color = z.bull ? color.new(color.teal, 40) : color.new(color.red, 40),
+                             style = line.style_dashed, width = 1))
+                    if e8ShowLbl
+                        tag = (z.tfCount > 1 ? "⚡ " : "") + (z.bull ? "FVG ▲ " : "FVG ▼ ") + z.tfName + " · " + f_tier(sc) + " " + str.tostring(sc, "#.#") + "/10"
+                        array.push(fvgLabs, label.new(bar_index + e8Extend, z.bull ? dTop : dBot, tag,
+                             style = label.style_label_left, color = color.new(color.black, 100),
+                             textcolor = z.bull ? color.new(color.teal, 10) : color.new(color.red, 10),
+                             size = size.tiny))
+
+bullFVGnew = e8On and cBg and f_isNew(cBg, cBt, cBb)
+bearFVGnew = e8On and cSg and f_isNew(cSg, cSt, cSb)
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E9 · SWEEP & REJECT
+// ═══════════════════════════════════════════════════════════════════════════
+grpE9 = "E9 ·  Sweep & Reject"
+e9On       = input.bool(true, "▶  ENABLE Sweep & Reject", group = grpE9)
+e9Draw     = input.bool(true, "     Draw sweep labels", group = grpE9)
+e9Basic    = input.bool(false, "     Draw basic SWEEP labels", tooltip = "OFF = Sureshot only (quieter).", group = grpE9)
+e9Compact  = input.bool(true, "     Compact labels", group = grpE9)
+e9Len      = input.int(10, "     Swing length", minval = 3, maxval = 50, group = grpE9)
+e9Buf      = input.float(0.05, "     Sweep buffer (× ATR)", minval = 0, maxval = 1, step = 0.01, group = grpE9)
+e9Valid    = input.int(10, "     Confirmation valid for (bars)", minval = 1, maxval = 50, group = grpE9)
+e9OneShot  = input.bool(true, "     One signal per swing level", group = grpE9)
+e9MinWick  = input.float(0.6, "     Sureshot: min wick-to-range", minval = 0.3, maxval = 0.95, step = 0.05, group = grpE9)
+e9MinVolM  = input.float(1.5, "     Sureshot: min volume (× avg)", minval = 1.0, maxval = 5.0, step = 0.1, group = grpE9)
+e9NeedFT   = input.bool(true, "     Sureshot: require follow-through", group = grpE9)
+e9ShowBasic = f_show(e9On, e9Draw and e9Basic, "study")
+e9ShowSure  = f_show(e9On, e9Draw, "focus")
+
+var float swHigh = na
+var float swLow  = na
+var bool  swLowDone  = false
+var bool  swHighDone = false
+
+swPh = ta.pivothigh(high, e9Len, e9Len)
+swPl = ta.pivotlow(low,  e9Len, e9Len)
+if not na(swPh)
+    swHigh := swPh
+    swHighDone := false
+if not na(swPl)
+    swLow := swPl
+    swLowDone := false
+
+bullSweep = e9On and not na(swLow)  and low  < swLow  - atr * e9Buf and close > swLow  and (not e9OneShot or not swLowDone)
+bearSweep = e9On and not na(swHigh) and high > swHigh + atr * e9Buf and close < swHigh and (not e9OneShot or not swHighDone)
+
+swRng     = high - low
+swLowerWk = swRng > 0 ? (math.min(open, close) - low) / swRng : 0.0
+swUpperWk = swRng > 0 ? (high - math.max(open, close)) / swRng : 0.0
+swVolOk   = avgVol20 > 0 and nz(volume, 1.0) >= avgVol20 * e9MinVolM
+bullQual  = swLowerWk >= e9MinWick and swVolOk
+bearQual  = swUpperWk >= e9MinWick and swVolOk
+
+var bool  bullSweepLive = false
+var bool  bearSweepLive = false
+var int   swBullBar = na
+var int   swBearBar = na
+var bool  pendBull = false
+var float pendBullClose = na
+var int   pendBullBar = na
+var bool  pendBear = false
+var float pendBearClose = na
+var int   pendBearBar = na
+var bool  sureshotBull = false
+var bool  sureshotBear = false
+var int   ssBullBar = na
+var int   ssBearBar = na
+
+if e9On and barstate.isconfirmed
+    if pendBull and bar_index == pendBullBar + 1
+        if close > pendBullClose
+            sureshotBull := true
+            ssBullBar := bar_index
+            if e9ShowSure
+                label.new(pendBullBar, low, "SURESHOT ▲", style = label.style_label_up, color = color.new(#e8b339, 10), textcolor = color.black, size = size.small)
+        pendBull := false
+    if pendBear and bar_index == pendBearBar + 1
+        if close < pendBearClose
+            sureshotBear := true
+            ssBearBar := bar_index
+            if e9ShowSure
+                label.new(pendBearBar, high, "SURESHOT ▼", style = label.style_label_down, color = color.new(#e8b339, 10), textcolor = color.black, size = size.small)
+        pendBear := false
+    if bullSweep
+        bullSweepLive := true
+        swBullBar := bar_index
+        swLowDone := true
+        if e9ShowBasic
+            label.new(bar_index, low, e9Compact ? "SWEEP ▲" : "SWEEP ▲ REJECT", style = label.style_label_up, color = color.new(color.teal, 15), textcolor = color.white, size = size.tiny)
+        if bullQual
+            if e9NeedFT
+                pendBull := true
+                pendBullClose := close
+                pendBullBar := bar_index
+            else
+                sureshotBull := true
+                ssBullBar := bar_index
+    if bearSweep
+        bearSweepLive := true
+        swBearBar := bar_index
+        swHighDone := true
+        if e9ShowBasic
+            label.new(bar_index, high, e9Compact ? "SWEEP ▼" : "SWEEP ▼ REJECT", style = label.style_label_down, color = color.new(color.maroon, 15), textcolor = color.white, size = size.tiny)
+        if bearQual
+            if e9NeedFT
+                pendBear := true
+                pendBearClose := close
+                pendBearBar := bar_index
+            else
+                sureshotBear := true
+                ssBearBar := bar_index
+    if not na(swBullBar) and bar_index - swBullBar > e9Valid
+        bullSweepLive := false
+    if not na(swBearBar) and bar_index - swBearBar > e9Valid
+        bearSweepLive := false
+    if not na(ssBullBar) and bar_index - ssBullBar > e9Valid
+        sureshotBull := false
+    if not na(ssBearBar) and bar_index - ssBearBar > e9Valid
+        sureshotBear := false
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E10 · STRONG BREAKOUTS
+// ═══════════════════════════════════════════════════════════════════════════
+grpE10 = "E10 ·  Strong Breakouts"
+e10On   = input.bool(true,  "▶  ENABLE Strong Breakouts", group = grpE10)
+e10Draw = input.bool(false, "     Draw breakout zones", group = grpE10)
+e10Sltp = input.bool(false, "     Draw its own SL / TP", group = grpE10)
+e10Prd   = input.int(5, "     Pivot period", minval = 2, maxval = 20, group = grpE10)
+e10Hist  = input.int(200, "     Max zone history (bars)", minval = 30, maxval = 300, group = grpE10)
+e10Tests = input.int(2, "     Minimum pivot tests", minval = 2, maxval = 8, group = grpE10)
+e10MinS  = input.int(5, "     Hide breakouts weaker than (/10)", minval = 0, maxval = 10, group = grpE10)
+e10Show = f_show(e10On, e10Draw, "study")
+
+boDH = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
+boDL = request.security(syminfo.tickerid, "D", low,  lookahead = barmerge.lookahead_off)
+boAdr  = ta.sma(boDH - boDL, 10)
+boAdrV = not na(boAdr) and boAdr > 0 ? boAdr : close * 0.01
+boCw   = boAdrV * 0.02
+boSlD  = boAdrV * 0.025
+boTp1D = boAdrV * 0.05
+boTp2D = boAdrV * 0.075
+
+boPh = ta.pivothigh(high, e10Prd, e10Prd)
+boPl = ta.pivotlow(low,  e10Prd, e10Prd)
+var array<float> boPhv = array.new<float>()
+var array<int>   boPhl = array.new<int>()
+var array<float> boPlv = array.new<float>()
+var array<int>   boPll = array.new<int>()
+if not na(boPh)
+    array.unshift(boPhv, boPh)
+    array.unshift(boPhl, bar_index - e10Prd)
+    if array.size(boPhv) > 1
+        for x = array.size(boPhl) - 1 to 1
+            if bar_index - array.get(boPhl, x) > e10Hist
+                array.pop(boPhl)
+                array.pop(boPhv)
+if not na(boPl)
+    array.unshift(boPlv, boPl)
+    array.unshift(boPll, bar_index - e10Prd)
+    if array.size(boPlv) > 1
+        for x = array.size(boPll) - 1 to 1
+            if bar_index - array.get(boPll, x) > e10Hist
+                array.pop(boPll)
+                array.pop(boPlv)
+
+boVolR = avgVol20 > 0 ? nz(volume, 1.0) / avgVol20 : 1.0
+boBody = (high - low) > 0 ? math.abs(close - open) / (high - low) : 0.5
+boM3   = close - close[3]
+boM5   = close - close[5]
+boRsi  = ta.rsi(close, 14)
+
+f_boStrength(int nPiv, int age, bool isBull, float cvz) =>
+    s = 0.0
+    s += nPiv >= 5 ? 2.0 : nPiv == 4 ? 1.2 : nPiv == 3 ? 0.5 : 0.0
+    s += age >= 100 ? 1.5 : age >= 50 ? 1.0 : age >= 20 ? 0.5 : 0.0
+    bsc = boBody >= 0.85 ? 1.2 : boBody >= 0.7 ? 0.9 : boBody >= 0.55 ? 0.5 : 0.0
+    ar  = atr > 0 ? (high - low) / atr : 0.0
+    asc = ar >= 2.5 ? 1.3 : ar >= 1.5 ? 1.0 : ar >= 1.0 ? 0.5 : 0.0
+    s += math.min(2.5, bsc + asc)
+    s += boVolR >= 2.5 ? 2.0 : boVolR >= 2.0 ? 1.5 : boVolR >= 1.5 ? 1.0 : boVolR >= 1.3 ? 0.5 : 0.0
+    m3ok = (isBull and boM3 > 0) or (not isBull and boM3 < 0)
+    m5ok = (isBull and boM5 > 0) or (not isBull and boM5 < 0)
+    m3m = close > 0 ? math.abs(boM3) / (close * 0.001) : 0.0
+    m5m = close > 0 ? math.abs(boM5) / (close * 0.001) : 0.0
+    s += m3ok and m5ok ? math.min(1.5, m3m * 0.4 + m5m * 0.3) : m3ok ? math.min(0.8, m3m * 0.3) : -0.5
+    clean = cvz > 0.3 * boCw
+    rsiOk = (isBull and boRsi > 55) or (not isBull and boRsi < 45)
+    s += clean and rsiOk ? 0.5 : clean ? 0.25 : 0.0
+    math.max(0.0, math.min(10.0, math.round(s * 10) / 10))
+
+float boMax = na
+int boStart = bar_index
+int boN = 0
+boHgst = ta.highest(high, e10Prd)[1]
+if e10On and array.size(boPhv) >= e10Tests and close > open and close > boHgst
+    bm = array.get(boPhv, 0)
+    xx = 0
+    for x = 0 to array.size(boPhv) - 1
+        if array.get(boPhv, x) >= close
+            break
+        xx := x
+        bm := math.max(bm, array.get(boPhv, x))
+    if xx >= e10Tests and open <= bm
+        n2 = 0
+        bs = bar_index
+        for x = 0 to xx
+            pv = array.get(boPhv, x)
+            if pv <= bm and pv >= bm - boCw
+                n2 += 1
+                bs := array.get(boPhl, x)
+        if n2 >= e10Tests and boHgst < bm
+            boMax := bm
+            boStart := bs
+            boN := n2
+
+float boMin = na
+int boStartR = bar_index
+int boNR = 0
+boLwst = ta.lowest(low, e10Prd)[1]
+if e10On and array.size(boPlv) >= e10Tests and close < open and close < boLwst
+    bn = array.get(boPlv, 0)
+    xx = 0
+    for x = 0 to array.size(boPlv) - 1
+        if array.get(boPlv, x) <= close
+            break
+        xx := x
+        bn := math.min(bn, array.get(boPlv, x))
+    if xx >= e10Tests and open >= bn
+        n2 = 0
+        bs = bar_index
+        for x = 0 to xx
+            pv = array.get(boPlv, x)
+            if pv >= bn and pv <= bn + boCw
+                n2 += 1
+                bs := array.get(boPll, x)
+        if n2 >= e10Tests and boLwst > bn
+            boMin := bn
+            boStartR := bs
+            boNR := n2
+
+boBullS = not na(boMax) ? f_boStrength(boN, bar_index - boStart, true, close - boMax) : 0.0
+boBearS = not na(boMin) ? f_boStrength(boNR, bar_index - boStartR, false, boMin - close) : 0.0
+
+var int   boLastDir = 0
+var float boLastStr = 0.0
+var int   boLastBar = na
+
+if e10On and not na(boMax) and boBullS >= e10MinS
+    if e10Show
+        c = boBullS >= 9 ? #004d40 : boBullS >= 7 ? #00897b : #26a69a
+        box.new(boStart, boMax - boCw, bar_index, boMax, bgcolor = color.new(c, 84), border_color = color.new(c, 70))
+        label.new(math.round((boStart + bar_index) / 2), boMax - boCw / 2, "BULL BO " + str.tostring(boBullS, "#.0") + "/10", color = color.new(c, 100), textcolor = c, style = label.style_label_center, size = size.small)
+        if e10Sltp
+            sl = boMax - boCw - boSlD
+            line.new(boStart, sl, bar_index, sl, color = #6D1A1A, style = line.style_dashed)
+            line.new(boStart, boMax + boTp1D, bar_index, boMax + boTp1D, color = #4DB6AC, style = line.style_dashed)
+            line.new(boStart, boMax + boTp2D, bar_index, boMax + boTp2D, color = #26A69A, style = line.style_dashed)
+    boLastDir := 1
+    boLastStr := boBullS
+    boLastBar := bar_index
+
+if e10On and not na(boMin) and boBearS >= e10MinS
+    if e10Show
+        c = boBearS >= 9 ? #4a148c : boBearS >= 7 ? #880e4f : #b71c1c
+        box.new(boStartR, boMin, bar_index, boMin + boCw, bgcolor = color.new(c, 84), border_color = color.new(c, 70))
+        label.new(math.round((boStartR + bar_index) / 2), boMin + boCw / 2, "BEAR BO " + str.tostring(boBearS, "#.0") + "/10", color = color.new(c, 100), textcolor = c, style = label.style_label_center, size = size.small)
+        if e10Sltp
+            sl = boMin + boCw + boSlD
+            line.new(boStartR, sl, bar_index, sl, color = #6D1A1A, style = line.style_dashed)
+            line.new(boStartR, boMin - boTp1D, bar_index, boMin - boTp1D, color = #4DB6AC, style = line.style_dashed)
+            line.new(boStartR, boMin - boTp2D, bar_index, boMin - boTp2D, color = #26A69A, style = line.style_dashed)
+    boLastDir := -1
+    boLastStr := boBearS
+    boLastBar := bar_index
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E11 · CPR DAY BIAS
+// ═══════════════════════════════════════════════════════════════════════════
+grpE11 = "E11 ·  CPR Day Bias"
+e11On   = input.bool(true, "▶  ENABLE CPR", group = grpE11)
+e11Draw = input.bool(false, "     Plot P / TC / BC", tooltip = "OFF in quiet modes — use dashboard Day Type.", group = grpE11)
+e11Show = f_show(e11On, e11Draw, "study")
+
+[pdH, pdL, pdC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)
+cprP   = (pdH + pdL + pdC) / 3
+cprBCr = (pdH + pdL) / 2
+cprTCr = 2 * cprP - cprBCr
+cprTop = math.max(cprTCr, cprBCr)
+cprBot = math.min(cprTCr, cprBCr)
+cprWidthPct = cprP != 0 ? (cprTop - cprBot) / cprP * 100 : na
+cprBull = e11On and close > cprTop
+cprBear = e11On and close < cprBot
+
+plot(e11Show ? cprP   : na, "CPR Pivot", color.blue, 1, plot.style_circles)
+plot(e11Show ? cprTop : na, "CPR TC",    color.new(color.blue, 40), 1, plot.style_circles)
+plot(e11Show ? cprBot : na, "CPR BC",    color.new(color.blue, 40), 1, plot.style_circles)
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E12 · SESSION GATING
+// ═══════════════════════════════════════════════════════════════════════════
+grpE12 = "E12 ·  Session Gating"
+e12On     = input.bool(true, "▶  ENABLE Session Gating", group = grpE12)
+e12Choice = input.string("London + New York", "     Allowed sessions",
+     options = ["London + New York", "London only", "New York only", "Overlap only (London ∩ NY)"], group = grpE12)
+e12London = input.session("0800-1700", "     London window", group = grpE12)
+e12NY     = input.session("0820-1700", "     New York window", group = grpE12)
+e12Shade  = input.bool(false, "     Shade allowed sessions", group = grpE12)
+
+inLondon = not na(time(timeframe.period, e12London, "Europe/London"))
+inNY     = not na(time(timeframe.period, e12NY,     "America/New_York"))
+pickLon = e12Choice == "London only"
+pickNY  = e12Choice == "New York only"
+pickOvl = e12Choice == "Overlap only (London ∩ NY)"
+sessRaw = pickLon ? inLondon : pickNY ? inNY : pickOvl ? (inLondon and inNY) : (inLondon or inNY)
+gateSession = not e12On or sessRaw
+
+bgcolor(e12On and e12Shade and sessRaw ? color.new(color.teal, 94) : na, title = "Allowed Session")
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E13 · VOLATILITY REGIME
+// ═══════════════════════════════════════════════════════════════════════════
+grpE13 = "E13 ·  Volatility Regime"
+e13On       = input.bool(true, "▶  ENABLE Volatility Regime", group = grpE13)
+e13Look     = input.int(200, "     ATR percentile lookback", minval = 50, maxval = 1000, group = grpE13)
+e13FloorPct = input.int(35, "     Block below percentile", minval = 0, maxval = 90, group = grpE13)
+e13HighPct  = input.int(80, "     Elevated percentile", minval = 50, maxval = 100, group = grpE13)
+e13SlMult   = input.float(1.4, "     Stop-buffer × when elevated", minval = 1.0, maxval = 3.0, step = 0.1, group = grpE13)
+
+atrRank = nz(ta.percentrank(atr, e13Look), 50)
+volDead = e13On and atrRank < e13FloorPct
+volHigh = atrRank >= e13HighPct
+gateVol = not volDead
+volRegime = atrRank < e13FloorPct ? "Dead " + str.tostring(atrRank, "#") + "%" : volHigh ? "Elevated " + str.tostring(atrRank, "#") + "%" : "Normal " + str.tostring(atrRank, "#") + "%"
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E14 · ROUND-NUMBER MAGNETS
+// ═══════════════════════════════════════════════════════════════════════════
+grpE14 = "E14 ·  Round-Number Magnets"
+e14On     = input.bool(true,  "▶  ENABLE Round-Number Levels", group = grpE14)
+e14Draw   = input.bool(true,  "     Draw the levels", group = grpE14)
+e14Step   = input.float(10.0, "     Increment ($)", minval = 0.5, step = 0.5, group = grpE14)
+e14Count  = input.int(2, "     Levels above / below", minval = 1, maxval = 10, group = grpE14)
+e14Major  = input.float(50.0, "     Emphasise multiples of ($)", minval = 5.0, step = 5.0, group = grpE14)
+e14MajorsOnly = input.bool(true, "     Signal Focus: majors only", group = grpE14)
+e14Filter = input.bool(true,  "     Block BUY into level from below", group = grpE14)
+e14Buffer = input.float(0.35, "     …within (× ATR)", minval = 0.05, step = 0.05, group = grpE14)
+e14Show = f_show(e14On, e14Draw, "focus")
+
+roundAbove  = math.ceil(close / e14Step) * e14Step
+roundBelow  = math.floor(close / e14Step) * e14Step
+distToAbove = roundAbove - close
+rnBlocked   = e14On and e14Filter and distToAbove <= atr * e14Buffer
+gateRound   = not rnBlocked
+
+var array<line>  rnLines = array.new<line>()
+var array<label> rnLabs  = array.new<label>()
+if barstate.islast
+    while array.size(rnLines) > 0
+        line.delete(array.pop(rnLines))
+    while array.size(rnLabs) > 0
+        label.delete(array.pop(rnLabs))
+    if e14Show
+        majorsOnly = chartMode == "Signal Focus" and e14MajorsOnly
+        for k = -e14Count to e14Count
+            lvl = roundBelow + k * e14Step
+            if lvl > 0
+                isMajor = math.abs(lvl / e14Major - math.round(lvl / e14Major)) < 0.0001
+                if majorsOnly and not isMajor
+                    continue
+                array.push(rnLines, line.new(bar_index - 200, lvl, bar_index + 25, lvl,
+                     color = isMajor ? color.new(color.yellow, 30) : color.new(color.gray, 70),
+                     style = isMajor ? line.style_solid : line.style_dotted,
+                     width = isMajor ? 2 : 1))
+                if isMajor
+                    array.push(rnLabs, label.new(bar_index + 25, lvl, str.tostring(lvl, "#.##"),
+                         style = label.style_label_left, color = color.new(color.black, 100),
+                         textcolor = color.new(color.yellow, 15), size = size.tiny))
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E15 · NEWS GUARD
+// ═══════════════════════════════════════════════════════════════════════════
+grpE15 = "E15 ·  News Guard"
+e15On     = input.bool(true, "▶  ENABLE News Guard", group = grpE15)
+e15Block  = input.bool(true, "     Block signals during caution", group = grpE15)
+e15Before = input.int(15, "     Caution BEFORE (minutes)", minval = 0, maxval = 120, group = grpE15)
+e15After  = input.int(45, "     Caution AFTER (minutes)", minval = 0, maxval = 240, group = grpE15)
+
+e15T1 = input.time(timestamp("2020-01-01 00:00 +0000"), "Event 1 time", group = grpE15)
+e15L1 = input.string("NFP", "Event 1 label", group = grpE15)
+e15T2 = input.time(timestamp("2020-01-01 00:00 +0000"), "Event 2 time", group = grpE15)
+e15L2 = input.string("CPI", "Event 2 label", group = grpE15)
+e15T3 = input.time(timestamp("2020-01-01 00:00 +0000"), "Event 3 time", group = grpE15)
+e15L3 = input.string("FOMC", "Event 3 label", group = grpE15)
+e15T4 = input.time(timestamp("2020-01-01 00:00 +0000"), "Event 4 time", group = grpE15)
+e15L4 = input.string("PPI / Retail Sales", "Event 4 label", group = grpE15)
+e15T5 = input.time(timestamp("2020-01-01 00:00 +0000"), "Event 5 time", group = grpE15)
+e15L5 = input.string("Custom", "Event 5 label", group = grpE15)
+
+e15AutoNFP = input.bool(true, "     Auto-flag NFP", group = grpE15)
+e15VolGrd  = input.bool(true, "     Auto-detect vol/volume spike", group = grpE15)
+e15RngMult = input.float(2.0, "     Spike — bar range (× ATR)", minval = 1.0, maxval = 6.0, step = 0.1, group = grpE15)
+e15VolMult = input.float(2.5, "     Spike — volume (× avg)", minval = 1.0, maxval = 8.0, step = 0.1, group = grpE15)
+e15Shade   = input.bool(true, "     Shade caution windows", group = grpE15)
+
+f_inNews(int evtMs) =>
+    ok = false
+    if not na(evtMs) and evtMs > 0
+        loMs = evtMs - e15Before * 60 * 1000
+        hiMs = evtMs + e15After * 60 * 1000
+        ok := time >= loMs and time <= hiMs
+    ok
+
+mN1 = e15On and f_inNews(e15T1)
+mN2 = e15On and f_inNews(e15T2)
+mN3 = e15On and f_inNews(e15T3)
+mN4 = e15On and f_inNews(e15T4)
+mN5 = e15On and f_inNews(e15T5)
+manualNews = mN1 or mN2 or mN3 or mN4 or mN5
+manualLbl  = mN1 ? e15L1 : mN2 ? e15L2 : mN3 ? e15L3 : mN4 ? e15L4 : mN5 ? e15L5 : ""
+
+nfpH   = hour(time, "America/New_York")
+nfpM   = minute(time, "America/New_York")
+nfpDow = dayofweek(time, "America/New_York")
+nfpDay = dayofmonth(time, "America/New_York")
+nfpFirstFri = nfpDow == dayofweek.friday and nfpDay <= 7
+nfpMins = (nfpH * 60 + nfpM) - (8 * 60 + 30)
+autoNFP = e15On and e15AutoNFP and nfpFirstFri and nfpMins >= -e15Before and nfpMins <= e15After
+
+vgAvgRange = ta.sma(high - low, 20)
+volSpike = e15On and e15VolGrd and atr > 0 and vgAvgRange > 0 and avgVol20 > 0 and (high - low) >= atr * e15RngMult and nz(volume, 1.0) >= avgVol20 * e15VolMult
+
+newsCaution = e15On and (manualNews or autoNFP or volSpike)
+newsLbl     = manualNews ? manualLbl : autoNFP ? "NFP" : volSpike ? "VOL SPIKE" : ""
+gateNews    = not (newsCaution and e15Block)
+
+bgcolor(newsCaution and e15Shade ? color.new(#e8b339, 88) : na, title = "News Caution")
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E16 · SIGNAL ENGINE  — BUY ONLY
+// ═══════════════════════════════════════════════════════════════════════════
+grpE16 = "E16 ·  Signal Engine (BUY only)"
+e16On       = input.bool(true, "▶  ENABLE Signal Engine", group = grpE16)
+e16Draw     = input.bool(true, "     Draw signal labels", group = grpE16)
+e16MinScore = input.int(6, "     Min score to fire", minval = 2, maxval = 10, group = grpE16)
+e16MaxBear  = input.int(4, "     Veto BUY if bear pressure ≥", minval = 2, maxval = 10, group = grpE16)
+e16Spread   = input.int(3, "     Min lead over bear pressure", minval = 0, maxval = 6, group = grpE16)
+e16Cooldown = input.int(15, "     Min bars between signals", minval = 1, group = grpE16)
+e16Dedupe   = input.float(1.0, "     Suppress repeat within (× ATR)", minval = 0.0, step = 0.1, group = grpE16)
+e16MaxDay   = input.int(3, "     Max signals per day (0 = unlimited)", minval = 0, maxval = 20, group = grpE16)
+e16Recent   = input.int(10, "     Sweep / FVG recent window", minval = 3, group = grpE16)
+e16HtfOn    = input.bool(true, "     Require HTF bias alignment", group = grpE16)
+e16MomOn    = input.bool(true, "     Require ATR > 20-bar avg", group = grpE16)
+e16NeedSS   = input.bool(false, "     Require Sureshot sweep", group = grpE16)
+e16SlAtr    = input.float(1.0, "     Stop buffer (× ATR)", minval = 0.1, step = 0.1, group = grpE16)
+e16Rr1      = input.float(1.0, "     Target 1 (R)", minval = 0.5, step = 0.5, group = grpE16)
+e16Rr2      = input.float(2.0, "     Target 2 (R)", minval = 0.5, step = 0.5, group = grpE16)
+// BUY labels always allowed even in Clean Chart
+e16Show = e16On and e16Draw
+
+momOK = atr > atrAvg
+
+maxScore = (e1Active ? 1 : 0) + (e2On ? 1 : 0) + (e3On ? 1 : 0) + (e4On ? 1 : 0) + (e5On ? 1 : 0) + (e6On ? 1 : 0) + (e7On ? 1 : 0) + (e8On ? 1 : 0) + (e9On ? 1 : 0) + (e10On ? 1 : 0)
+effMin   = math.min(e16MinScore, maxScore)
+
+bullScore = 0
+bullScore += e1Active and delta > 0 and cvdRising ? 1 : 0
+bullScore += e2On and not na(avwap) and close > avwap ? 1 : 0
+bullScore += e3On and not na(poc) and close > poc ? 1 : 0
+bullScore += e4On and trendDir == 1 ? 1 : 0
+bullScore += e5On and inBullOB ? 1 : 0
+bullScore += sdBiasBull ? 1 : 0
+bullScore += loBull ? 1 : 0
+bullScore += e8On and bar_index - lastBullFVGTouch <= e16Recent ? 1 : 0
+bullScore += e9On and (bullSweepLive or sureshotBull) ? 1 : 0
+bullScore += e10On and boLastDir == 1 and not na(boLastBar) and bar_index - boLastBar <= e16Recent ? 1 : 0
+
+bearScore = 0
+bearScore += e1Active and delta < 0 and cvdFalling ? 1 : 0
+bearScore += e2On and not na(avwap) and close < avwap ? 1 : 0
+bearScore += e3On and not na(poc) and close < poc ? 1 : 0
+bearScore += e4On and trendDir == -1 ? 1 : 0
+bearScore += e5On and inBearOB ? 1 : 0
+bearScore += sdBiasBear ? 1 : 0
+bearScore += loBear ? 1 : 0
+bearScore += e8On and bar_index - lastBearFVGTouch <= e16Recent ? 1 : 0
+bearScore += e9On and (bearSweepLive or sureshotBear) ? 1 : 0
+bearScore += e10On and boLastDir == -1 and not na(boLastBar) and bar_index - boLastBar <= e16Recent ? 1 : 0
+
+var int   lastSigBar   = -9999
+var float lastSigPrice = na
+var int   sigToday     = 0
+if dayChange
+    sigToday := 0
+
+gateScore  = maxScore > 0 and bullScore >= effMin and bullScore - bearScore >= e16Spread
+gateBear   = bearScore < e16MaxBear
+gateHtf    = not e16HtfOn or htfBull
+gateMom    = not e16MomOn or momOK
+gateSS     = not e16NeedSS or sureshotBull
+gateDedupe = e16Dedupe <= 0 or na(lastSigPrice) or math.abs(close - lastSigPrice) > atr * e16Dedupe
+gateCool   = bar_index - lastSigBar > e16Cooldown
+gateDaily  = e16MaxDay == 0 or sigToday < e16MaxDay
+gateFilters = gateSession and gateVol and gateRound and gateNews
+
+buySignal = e16On and gateScore and gateBear and gateHtf and gateMom and gateSS and gateFilters and gateDedupe and gateCool and gateDaily and barstate.isconfirmed
+
+if buySignal
+    lastSigBar   := bar_index
+    lastSigPrice := close
+    sigToday     += 1
+    if e16Show
+        slMult = e13On and volHigh ? e13SlMult : 1.0
+        slL    = (na(swLow) ? low : math.min(swLow, low)) - atr * e16SlAtr * slMult
+        riskL  = close - slL
+        label.new(bar_index, low - atr * 0.5,
+             "BUY  " + str.tostring(bullScore) + "/" + str.tostring(maxScore) +
+             "\nE " + str.tostring(close, format.mintick) + "   SL " + str.tostring(slL, format.mintick) +
+             "\nT1 " + str.tostring(close + riskL * e16Rr1, format.mintick) +
+             "   T2 " + str.tostring(close + riskL * e16Rr2, format.mintick),
+             style = label.style_label_up, color = color.new(color.green, 0),
+             textcolor = color.white, size = size.normal,
+             tooltip = "Session: " + f_sess() + "\nVolatility: " + volRegime + "\nBear pressure: " + str.tostring(bearScore) + "/" + str.tostring(maxScore) + "\nNext round: " + str.tostring(roundAbove, "#.##") + (newsCaution ? "\n⚠ News: " + newsLbl : ""))
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RIGHT-EDGE LEVEL TAGS
+// ═══════════════════════════════════════════════════════════════════════════
+var array<label> lvlArr = array.new<label>()
+
+f_lvl(bool show, float y, string txt, color col) =>
+    if show and not na(y)
+        array.push(lvlArr, label.new(bar_index, y, txt + " " + str.tostring(y, format.mintick),
+             style = label.style_label_left, color = color.new(color.black, 100),
+             textcolor = col, size = size.tiny))
+
+if barstate.islast
+    while array.size(lvlArr) > 0
+        label.delete(array.pop(lvlArr))
+    if showLevelTags and chartMode != "Clean Chart"
+        f_lvl(e2Show, avwap, "AVWAP", color.fuchsia)
+        f_lvl(e3Show, poc,   "POC",   color.orange)
+        f_lvl(e3ShowVa, vah, "VAH",   color.orange)
+        f_lvl(e3ShowVa, val, "VAL",   color.orange)
+        f_lvl(e11Show, cprP, "CPR",  color.blue)
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  E17 · DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════
+grpE17 = "E17 ·  Dashboard"
+e17On   = input.bool(true, "▶  ENABLE Dashboard", group = grpE17)
+e17Pos  = input.string("Top Right", "     Position",
+     options = ["Top Right", "Middle Right", "Bottom Right", "Top Left", "Bottom Left"], group = grpE17)
+e17Size = input.string("Tiny", "     Text size", options = ["Tiny", "Small", "Normal"], group = grpE17)
+e17Compact = input.bool(true, "     Compact rows (score + gates + key engines)", group = grpE17)
+
+dashPos = e17Pos == "Middle Right" ? position.middle_right : e17Pos == "Bottom Right" ? position.bottom_right : e17Pos == "Top Left" ? position.top_left : e17Pos == "Bottom Left" ? position.bottom_left : position.top_right
+dashTxt = e17Size == "Small" ? size.small : e17Size == "Normal" ? size.normal : size.tiny
+
+var table dash = table.new(dashPos, 2, 24, bgcolor = color.new(#0b0e15, 12), frame_color = color.new(#2a3446, 40), frame_width = 1, border_color = color.new(#2a3446, 62), border_width = 1)
+
+f_cell(int r, string k, string v, color vc) =>
+    table.cell(dash, 0, r, k, text_color = color.new(#e6ecf5, 10), text_size = dashTxt, text_halign = text.align_left)
+    table.cell(dash, 1, r, v, text_color = vc, text_size = dashTxt, text_halign = text.align_right)
+
+blockReason = not gateSession ? "Outside session" : not gateVol ? "Volatility dead" : not gateNews ? "News: " + newsLbl : not gateRound ? "Into round level" : not gateDaily ? "Daily cap hit" : not gateSS ? "No Sureshot yet" : "Clear"
+
+if barstate.islast and e17On
+    table.clear(dash, 0, 0, 1, 23)
+    int r = 0
+    f_cell(r, "SMARTFLOW · " + chartMode, str.tostring(bullScore) + "/" + str.tostring(maxScore) + " · " + f_sess(), bullScore >= effMin ? color.lime : #7f8b9e)
+    r += 1
+    showAll = not e17Compact or chartMode == "Full Study"
+    if e1On and showAll
+        f_cell(r, "E1 Order Flow", indexMode ? "n/a" : str.tostring(delta, format.volume) + (cvdRising ? " ▲" : " ▼"), indexMode ? #7f8b9e : delta >= 0 and cvdRising ? color.lime : color.red)
+        r += 1
+    if e2On and (showAll or true)
+        f_cell(r, "E2 AVWAP", na(avwap) ? "—" : str.tostring(avwap, format.mintick), not na(avwap) and close > avwap ? color.lime : color.red)
+        r += 1
+    if e3On
+        f_cell(r, "E3 POC", na(poc) ? "—" : str.tostring(poc, format.mintick), not na(poc) and close > poc ? color.lime : color.red)
+        r += 1
+    if e4On
+        f_cell(r, "E4 Structure", trendDir == 1 ? "Bullish" : trendDir == -1 ? "Bearish" : "—", trendDir == 1 ? color.lime : trendDir == -1 ? color.red : #7f8b9e)
+        r += 1
+    if e5On and showAll
+        f_cell(r, "E5 Order Blocks", str.tostring(array.size(obBulls)) + "B / " + str.tostring(array.size(obBears)) + "S" + (inBullOB ? " · in BULL" : inBearOB ? " · in BEAR" : ""), inBullOB ? color.lime : inBearOB ? color.red : #e6ecf5)
+        r += 1
+    if e6On and showAll
+        f_cell(r, "E6 S/D", sdBiasTxt, sdBiasBull ? #17C3B2 : sdBiasBear ? #E23E7C : #7f8b9e)
+        r += 1
+    if e7On and showAll
+        f_cell(r, "E7 Liq Pull", loPullTxt, math.abs(loPull) < 8 ? #e8b339 : loPull > 0 ? #e957d6 : #22d3a6)
+        r += 1
+    if e8On
+        f_cell(r, "E8 FVG", str.tostring(array.size(zones)) + " live", bar_index - lastBullFVGTouch <= e16Recent ? color.lime : bar_index - lastBearFVGTouch <= e16Recent ? color.red : #7f8b9e)
+        r += 1
+    if e9On
+        f_cell(r, "E9 Sweep", sureshotBull ? "▲ SURESHOT" : sureshotBear ? "▼ SURESHOT" : bullSweepLive ? "▲ confirmed" : bearSweepLive ? "▼ confirmed" : "—", sureshotBull or sureshotBear ? #e8b339 : bullSweepLive ? color.lime : bearSweepLive ? color.red : #7f8b9e)
+        r += 1
+    if e10On and showAll
+        f_cell(r, "E10 Breakout", boLastDir == 1 ? "BULL " + str.tostring(boLastStr, "#.0") : boLastDir == -1 ? "BEAR " + str.tostring(boLastStr, "#.0") : "—", boLastDir == 1 ? color.lime : boLastDir == -1 ? color.red : #7f8b9e)
+        r += 1
+    if e11On
+        f_cell(r, "E11 CPR", cprBull ? "Above TC" : cprBear ? "Below BC" : "Inside", cprBull ? color.lime : cprBear ? color.red : #7f8b9e)
+        r += 1
+    if e12On
+        f_cell(r, "E12 Session", f_sess() + (sessRaw ? " ✓" : " ✗"), sessRaw ? color.lime : color.red)
+        r += 1
+    if e13On
+        f_cell(r, "E13 Vol", volRegime, volDead ? color.red : volHigh ? color.yellow : color.lime)
+        r += 1
+    if e14On and showAll
+        f_cell(r, "E14 Round", str.tostring(roundAbove, "#.##"), rnBlocked ? color.orange : color.yellow)
+        r += 1
+    if e15On
+        f_cell(r, "E15 News", newsCaution ? "⚠ " + newsLbl : "clear", newsCaution ? #e8b339 : color.lime)
+        r += 1
+    if e16On
+        f_cell(r, "HTF (" + biasTf + ")", htfBull ? "Bullish" : htfBear ? "Bearish" : "Flat", htfBull ? color.lime : htfBear ? color.red : #7f8b9e)
+        r += 1
+        f_cell(r, "Bear pressure", str.tostring(bearScore) + "/" + str.tostring(maxScore), bearScore >= e16MaxBear ? color.orange : #7f8b9e)
+        r += 1
+        f_cell(r, "GATE", blockReason, blockReason == "Clear" ? color.lime : color.orange)
+        r += 1
+    if not anyVol
+        f_cell(r, "⚠ Volume", "index mode", color.yellow)
+
+alertcondition(buySignal, "SmartFlow BUY", "SmartFlow Gold BUY on {{ticker}} ({{interval}})")
+alertcondition(e9On and sureshotBull and ssBullBar == bar_index, "Sureshot Sweep ▲", "Sureshot bullish sweep on {{ticker}}")
+alertcondition(bullSweep, "Sweep & Reject ▲", "Sell-side liquidity swept on {{ticker}}")
+alertcondition(bearSweep, "Sweep & Reject ▼", "Buy-side liquidity swept on {{ticker}}")
+alertcondition(bullFVGnew, "New bullish FVG (chart TF)", "New bullish FVG on {{ticker}}")
+alertcondition(bearFVGnew, "New bearish FVG (chart TF)", "New bearish FVG on {{ticker}}")
+alertcondition(e10On and boLastDir == 1 and boLastBar == bar_index, "Bullish Breakout", "Bullish breakout on {{ticker}}")
+alertcondition(e15On and newsCaution and not newsCaution[1], "News caution started", "News/volatility caution on {{ticker}}")
