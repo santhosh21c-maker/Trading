@@ -296,7 +296,6 @@ if barstate.isconfirmed
             bool  out = false
             float opx = na
             bool  wasSl = false
-            bool  wasT2 = false
 
             if low <= sp
                 out := true
@@ -315,7 +314,6 @@ if barstate.isconfirmed
                     rm := 0.0
                     out := true
                     opx := e + tp2p
-                    wasT2 := true
                     if i == dIdx
                         exWhy := "T2"
                 if not out and (array.get(exi, i) or flatNow)
