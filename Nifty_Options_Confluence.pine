@@ -4,13 +4,12 @@
 //  Built for Nifty CE/PE charts (also works on BankNifty / Sensex options)
 //  BUY = entry · SELL = exit
 //
-//  v1.1  TP1-LOCK RECIPE (fine-tuned to capture +10 before SL)
-//    • Exit FULL size at TP1 (+10) — books the minimum 10 pts when TP1 tags
-//    • No confluence SELL before TP1 (hold until +10 or SL)
-//    • Wider SL (default 30) so +10 usually prints first
-//    • Stricter entry: min score 5 + require E7 (ATR impulse)
+//  v1.1  SL=18 RECIPE (balanced stop + TP ladder)
+//    • Default SL = 18 (user-selected balance vs SL30 max +10-first)
+//    • Hold to TP1 · optional full exit at TP1 (TP1 lock) or runners to TP2/TP3
+//    • Stricter entry: min score 5 + require E7 / E3
+//    • Broad SL18 backtest: ~1 call/signal-day; ~38% reach TP1; prefer runners
 //    Honest limit: a hard stop can still lose if premium never reaches +10.
-//    Search sample: ~92% of trades hit +10 before SL with these defaults.
 // ═══════════════════════════════════════════════════════════════════════════
 
 indicator("Nifty Options Confluence", shorttitle = "Nifty Opt Conf", overlay = true,
@@ -41,18 +40,18 @@ requireE3 = input.bool(true, "Require E3 (VWAP reclaim) for BUY", group = gSig)
 useSync = input.bool(true, "CE/PE sync via underlying bias", group = gSig)
 biasTf  = input.timeframe("5", "Underlying bias TF", group = gSig)
 
-tp1LockMode = input.bool(true, "TP1 lock mode · exit FULL at +10", group = gRisk,
-     tooltip = "ON = book entire trade at TP1 (+10). OFF = allow TP2/TP3 runners.")
+tp1LockMode = input.bool(false, "TP1 lock mode · exit FULL at +10", group = gRisk,
+     tooltip = "OFF (default with SL18) = runners to TP2/TP3. ON = book full at +10 (net-negative @ SL18 in broad test).")
 holdToTp1 = input.bool(true, "Hold to TP1 · ignore confluence SELL before +10", group = gRisk,
      tooltip = "Prevents early exits that cut winners before +10.")
 tp1Pts = input.float(10.0, "TP1 (minimum capture)", minval = 1, step = 0.5, group = gRisk)
 tp2Pts = input.float(20.0, "TP2 (runners only)", minval = 1, step = 0.5, group = gRisk)
 tp3Pts = input.float(35.0, "TP3 (runners only)", minval = 1, step = 0.5, group = gRisk)
-slPts  = input.float(30.0, "SL (wider = more +10-first hits)", minval = 1, step = 0.5, group = gRisk,
-     tooltip = "Search best: SL≈30 with score 5 + E7 → ~92% TP1-first. Tighter SL cuts more trades before +10.")
-lockTp1 = input.bool(false, "After TP1 → SL to breakeven (runners mode)", group = gRisk,
-     tooltip = "Only relevant when TP1 lock mode is OFF.")
-trailTp2 = input.bool(false, "After TP2 → trail SL to entry+½·TP1", group = gRisk)
+slPts  = input.float(18.0, "SL (default 18 — balanced)", minval = 1, step = 0.5, group = gRisk,
+     tooltip = "Broad backtest @ SL18: ~38% reach TP1. Prefer runners ON. SL30 hit +10 more often on small sample.")
+lockTp1 = input.bool(true, "After TP1 → SL to breakeven (runners mode)", group = gRisk,
+     tooltip = "Recommended ON when TP1 lock mode is OFF.")
+trailTp2 = input.bool(true, "After TP2 → trail SL to entry+½·TP1", group = gRisk)
 cooldn = input.int(5, "Cooldown bars after exit", minval = 0, group = gRisk)
 maxDay = input.int(3, "Max entries per day", minval = 1, maxval = 20, group = gRisk)
 

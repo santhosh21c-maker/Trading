@@ -1,0 +1,39 @@
+{
+  "loaded_contracts": 40,
+  "expiries": [
+    "2025-04-24",
+    "2025-05-29",
+    "2025-06-26",
+    "2025-07-31"
+  ],
+  "runners": {
+    "n": 128,
+    "tp1": 48,
+    "tp2": 41,
+    "tp3": 35,
+    "sl": 80,
+    "avg_calls_per_active_day": 1.1636363636363636,
+    "net": -185.0,
+    "avg": -1.4453125,
+    "reasons": {
+      "SL": 80,
+      "TP3": 35,
+      "BE/trail": 13
+    }
+  },
+  "tp1_lock": {
+    "n": 130,
+    "tp1": 49,
+    "tp2": 0,
+    "tp3": 0,
+    "sl": 81,
+    "avg_calls_per_active_day": 1.1607142857142858,
+    "net": -968.0,
+    "avg": -7.446153846153846,
+    "reasons": {
+      "SL": 81,
+      "TP1": 49
+    }
+  },
+  "note": "1h IV-calibrated paths from real NSE daily option OHLC; not live 5m ticks"
+}
