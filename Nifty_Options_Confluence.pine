@@ -1,0 +1,326 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+//  NIFTY OPTIONS CONFLUENCE                                          v1.0
+//  Built for Nifty CE/PE charts (also works on BankNifty / Sensex options)
+//  BUY = entry · SELL = exit · TP1=10 · TP2=20 · TP3=35 · SL=10 (Nifty-tuned)
+//  After TP1 → SL moves to breakeven (locks the +10 path)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//  WHY CONFLUENCE
+//    Single engines on Nifty 5m were noisy (high SL%). Requiring several
+//    independent engines to agree cuts false buys and was net-positive in
+//    the Nifty retune backtest (realistic ATM premium + TP1 lock).
+//
+//  DEFAULT RECIPE (from search)
+//    Engines ON: E3 VWAP · E7 ATR · E14 Round · E5 Pullback · E1 Structure
+//                · E8 RSI · E15 CPR · E21 Squeeze
+//    Min score  = 3 (raise to 4 for fewer / higher-quality trades)
+//    CE/PE sync = ON (CE buys only in bullish underlying bias, PE in bearish)
+// ═══════════════════════════════════════════════════════════════════════════
+
+indicator("Nifty Options Confluence", shorttitle = "Nifty Opt Conf", overlay = true,
+     max_labels_count = 200, max_lines_count = 50)
+
+gEng = "①  Confluence engines (toggle)"
+gSig = "②  Signal rules"
+gRisk = "③  Risk · SL / TP (premium pts)"
+gFil = "④  Filters"
+gVis = "⑤  Display"
+
+e1  = input.bool(true, "E1  Swing structure", group = gEng)
+e3  = input.bool(true, "E3  VWAP reclaim", group = gEng)
+e5  = input.bool(true, "E5  Pullback continuation", group = gEng)
+e7  = input.bool(true, "E7  ATR expansion impulse", group = gEng)
+e8  = input.bool(true, "E8  RSI regime", group = gEng)
+e14 = input.bool(true, "E14 Round premium levels", group = gEng)
+e15 = input.bool(true, "E15 Option CPR", group = gEng)
+e21 = input.bool(true, "E21 Bollinger squeeze break", group = gEng)
+
+minScore = input.int(3, "Min engines to BUY", minval = 2, maxval = 8, group = gSig,
+     tooltip = "3 = balanced. 4 = safer / fewer trades (better in chop).")
+exitScore = input.int(2, "Min engines to SELL (exit)", minval = 1, maxval = 8, group = gSig)
+useSync = input.bool(true, "CE/PE sync via underlying bias", group = gSig)
+biasTf  = input.timeframe("5", "Underlying bias TF", group = gSig)
+
+tp1Pts = input.float(10.0, "TP1", minval = 1, step = 0.5, group = gRisk)
+tp2Pts = input.float(20.0, "TP2", minval = 1, step = 0.5, group = gRisk)
+tp3Pts = input.float(35.0, "TP3", minval = 1, step = 0.5, group = gRisk)
+slPts  = input.float(10.0, "SL (Nifty default 10)", minval = 1, step = 0.5, group = gRisk)
+lockTp1 = input.bool(true, "After TP1 → move SL to breakeven", group = gRisk)
+trailTp2 = input.bool(true, "After TP2 → trail SL to entry+½·TP1", group = gRisk)
+cooldn = input.int(5, "Cooldown bars after exit", minval = 0, group = gRisk)
+maxDay = input.int(4, "Max entries per day", minval = 1, maxval = 20, group = gRisk)
+
+useSess = input.bool(true, "Session gate", group = gFil)
+sess1 = input.session("0920-1115", "Morning (IST)", group = gFil)
+sess2 = input.session("1315-1505", "Afternoon (IST)", group = gFil)
+useLate = input.bool(true, "Block 15:00–15:30", group = gFil)
+lateSess = input.session("1500-1530", "Late block", group = gFil)
+useChop = input.bool(true, "ADX chop filter", group = gFil)
+adxLen = input.int(14, "ADX length", group = gFil)
+adxMin = input.float(18.0, "Min ADX", step = 0.5, group = gFil)
+
+paintBars = input.bool(true, "Green in BUY / red when flat", group = gVis)
+showLab = input.bool(true, "Dashboard", group = gVis)
+showSig = input.bool(true, "Labels", group = gVis)
+showTgt = input.bool(true, "SL/TP lines", group = gVis)
+
+// ── CE/PE + underlying ─────────────────────────────────────────────────────
+tkr = syminfo.ticker
+isCE = str.endswith(tkr, "CE")
+isPE = str.endswith(tkr, "PE")
+
+f_under() =>
+    str.contains(tkr, "BANKNIFTY") ? "NSE:BANKNIFTY" :
+       str.contains(tkr, "SENSEX") ? "BSE:SENSEX" :
+       str.contains(tkr, "NIFTY") ? "NSE:NIFTY" : syminfo.tickerid
+
+[uF, uS] = request.security(f_under(), biasTf, [ta.ema(close, 9), ta.ema(close, 21)], lookahead = barmerge.lookahead_off)
+undBull = uF > uS
+undBear = uF < uS
+sideOk = not useSync or (isCE and undBull) or (isPE and undBear) or (not isCE and not isPE)
+
+// ── Shared series ──────────────────────────────────────────────────────────
+emaF = ta.ema(close, 9)
+emaM = ta.ema(close, 21)
+emaS = ta.ema(close, 50)
+vwapS = ta.vwap
+atr = ta.atr(14)
+atrAvg = ta.sma(atr, 20)
+rsi = ta.rsi(close, 14)
+[diP, diM, adxVal] = ta.dmi(adxLen, adxLen)
+
+swing = 5
+ph = ta.pivothigh(high, swing, swing)
+pl = ta.pivotlow(low, swing, swing)
+var float lastSH = na
+var float lastSL = na
+if not na(ph)
+    lastSH := ph
+if not na(pl)
+    lastSL := pl
+
+emaStackUp = emaF > emaM and emaM > emaS and emaF > emaF[1]
+emaStackDn = emaF < emaM and emaM < emaS and emaF < emaF[1]
+
+roundStep = close >= 100 ? 10.0 : close >= 40 ? 5.0 : 2.5
+rndBelow = math.floor(close / roundStep) * roundStep
+rndAbove = rndBelow + roundStep
+
+[cH, cL, cC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)
+cprP = (cH + cL + cC) / 3
+cprBC = (cH + cL) / 2
+cprTC = 2 * cprP - cprBC
+cprTop = math.max(cprTC, cprBC)
+cprBot = math.min(cprTC, cprBC)
+
+basis = ta.sma(close, 20)
+dev = 2.0 * ta.stdev(close, 20)
+bbU = basis + dev
+bbW = basis != 0 ? (bbU - (basis - dev)) / basis * 100 : 0.0
+bbWMa = ta.sma(bbW, 50)
+squeeze = bbW < bbWMa * 0.75
+
+inSess = not na(time(timeframe.period, sess1, "Asia/Kolkata")) or not na(time(timeframe.period, sess2, "Asia/Kolkata"))
+lateBlk = useLate and not na(time(timeframe.period, lateSess, "Asia/Kolkata"))
+chopOk = not useChop or nz(adxVal, 0) >= adxMin
+filtersOk = (not useSess or inSess) and not lateBlk and chopOk
+
+dayChg = ta.change(time("D")) != 0
+
+// ── Per-engine raw votes ───────────────────────────────────────────────────
+b1  = e1  and not na(lastSH) and close > lastSH and close > open
+s1  = e1  and not na(lastSL) and close < lastSL
+
+b3  = e3  and close > vwapS and close[1] <= vwapS and close > open
+s3  = e3  and close < vwapS and close[1] >= vwapS
+
+b5  = e5  and emaStackUp and low <= emaF and close > emaF and close > open
+s5  = e5  and close < emaM
+
+b7  = e7  and atr > atrAvg and close > open and (close - open) > atr * 0.6 and close > close[1]
+s7  = e7  and (atr < atrAvg or (close < open and (open - close) > atr * 0.5))
+
+b8  = e8  and rsi > 50 and rsi[1] <= 50 and close > emaF
+s8  = e8  and rsi < 50 and rsi[1] >= 50
+
+b14 = e14 and low <= rndBelow and close > rndBelow and close > open
+s14 = e14 and high >= rndAbove and close < rndAbove
+
+b15 = e15 and close > cprTop and close[1] <= cprTop
+s15 = e15 and close < cprBot
+
+b21 = e21 and squeeze[1] and not squeeze and close > bbU
+s21 = e21 and close < basis
+
+buyVotes  = (b1 ? 1 : 0) + (b3 ? 1 : 0) + (b5 ? 1 : 0) + (b7 ? 1 : 0) + (b8 ? 1 : 0) + (b14 ? 1 : 0) + (b15 ? 1 : 0) + (b21 ? 1 : 0)
+sellVotes = (s1 ? 1 : 0) + (s3 ? 1 : 0) + (s5 ? 1 : 0) + (s7 ? 1 : 0) + (s8 ? 1 : 0) + (s14 ? 1 : 0) + (s15 ? 1 : 0) + (s21 ? 1 : 0)
+enginesOn = (e1 ? 1 : 0) + (e3 ? 1 : 0) + (e5 ? 1 : 0) + (e7 ? 1 : 0) + (e8 ? 1 : 0) + (e14 ? 1 : 0) + (e15 ? 1 : 0) + (e21 ? 1 : 0)
+effMin = math.min(minScore, math.max(enginesOn, 1))
+
+// ── Position ───────────────────────────────────────────────────────────────
+var int   pos = 0
+var float entryPx = na
+var float slPx = na
+var float tp1Px = na
+var float tp2Px = na
+var float tp3Px = na
+var int   entryBar = na
+var int   lastExit = -999
+var int   tradesDay = 0
+var int   winsDay = 0
+var int   tp1Hits = 0
+var float pnlDay = 0.0
+var bool  hitTP1 = false
+var bool  hitTP2 = false
+
+if dayChg
+    tradesDay := 0
+    winsDay := 0
+    tp1Hits := 0
+    pnlDay := 0.0
+
+coolOk = bar_index - lastExit >= cooldn
+dayOk = tradesDay < maxDay
+
+rawBuy = buyVotes >= effMin
+rawSell = sellVotes >= exitScore
+
+buySignal = barstate.isconfirmed and pos == 0 and rawBuy and filtersOk and sideOk and coolOk and dayOk
+
+if buySignal
+    pos := 1
+    entryPx := close
+    slPx := close - slPts
+    tp1Px := close + tp1Pts
+    tp2Px := close + tp2Pts
+    tp3Px := close + tp3Pts
+    entryBar := bar_index
+    hitTP1 := false
+    hitTP2 := false
+    tradesDay += 1
+    if showSig
+        label.new(bar_index, low,
+             "BUY " + str.tostring(buyVotes) + "/" + str.tostring(enginesOn) +
+             "\n" + str.tostring(close, format.mintick),
+             style = label.style_label_up, color = color.new(color.green, 0),
+             textcolor = color.white, size = size.small)
+
+bool exitNow = false
+string exitWhy = ""
+float exitMark = na
+
+if pos == 1 and barstate.isconfirmed
+    // TP1 lock
+    if not hitTP1 and high >= tp1Px
+        hitTP1 := true
+        tp1Hits += 1
+        if lockTp1
+            slPx := math.max(slPx, entryPx)
+        if showSig
+            label.new(bar_index, tp1Px, "TP1 +" + str.tostring(tp1Pts, "#.#") + (lockTp1 ? " · SL→BE" : ""),
+                 style = label.style_label_left, color = color.new(color.teal, 15),
+                 textcolor = color.white, size = size.tiny)
+    if hitTP1 and not hitTP2 and high >= tp2Px
+        hitTP2 := true
+        if trailTp2
+            slPx := math.max(slPx, entryPx + tp1Pts * 0.5)
+        if showSig
+            label.new(bar_index, tp2Px, "TP2 +" + str.tostring(tp2Pts, "#.#"),
+                 style = label.style_label_left, color = color.new(color.blue, 15),
+                 textcolor = color.white, size = size.tiny)
+
+    if rawSell
+        exitNow := true
+        exitWhy := "Confluence SELL"
+        exitMark := close
+    if low <= slPx
+        exitNow := true
+        exitWhy := hitTP1 and lockTp1 and slPx >= entryPx ? "BE / trail" : "SL"
+        exitMark := slPx
+    if high >= tp3Px
+        exitNow := true
+        exitWhy := "TP3"
+        exitMark := tp3Px
+
+if exitNow and pos == 1
+    exitPx = nz(exitMark, close)
+    // Approximate: if TP1 locked, treat half booked at TP1
+    tradePnl = hitTP1 and lockTp1 ? 0.5 * tp1Pts + 0.5 * (exitPx - entryPx) : exitPx - entryPx
+    pnlDay += tradePnl
+    if tradePnl > 0
+        winsDay += 1
+    if showSig
+        label.new(bar_index, high, "SELL · " + exitWhy + "\n" + str.tostring(tradePnl, "#.#") + " pts",
+             style = label.style_label_down,
+             color = tradePnl >= 0 ? color.new(color.maroon, 10) : color.new(color.red, 0),
+             textcolor = color.white, size = size.small)
+    pos := 0
+    lastExit := bar_index
+    entryPx := na
+    slPx := na
+    tp1Px := na
+    tp2Px := na
+    tp3Px := na
+
+var line lnSL = na
+var line lnT1 = na
+var line lnT2 = na
+var line lnT3 = na
+var line lnEn = na
+if barstate.islast
+    line.delete(lnSL)
+    line.delete(lnT1)
+    line.delete(lnT2)
+    line.delete(lnT3)
+    line.delete(lnEn)
+    if showTgt and pos == 1 and not na(entryPx)
+        x1 = nz(entryBar, bar_index)
+        x2 = bar_index + 3
+        lnEn := line.new(x1, entryPx, x2, entryPx, color = color.white, style = line.style_dotted)
+        lnSL := line.new(x1, slPx, x2, slPx, color = color.red, width = 2)
+        lnT1 := line.new(x1, tp1Px, x2, tp1Px, color = color.teal)
+        lnT2 := line.new(x1, tp2Px, x2, tp2Px, color = color.blue)
+        lnT3 := line.new(x1, tp3Px, x2, tp3Px, color = color.fuchsia)
+
+barcolor(paintBars ? (pos == 1 ? color.new(color.green, 0) : color.new(color.red, 35)) : na)
+
+// live vote string
+f_votes() =>
+    t = ""
+    t += b1 ? "E1 " : ""
+    t += b3 ? "E3 " : ""
+    t += b5 ? "E5 " : ""
+    t += b7 ? "E7 " : ""
+    t += b8 ? "E8 " : ""
+    t += b14 ? "E14 " : ""
+    t += b15 ? "E15 " : ""
+    t += b21 ? "E21 " : ""
+    t == "" ? "—" : t
+
+var table dash = table.new(position.top_right, 2, 12, bgcolor = color.new(#0b0e15, 8),
+     frame_color = color.new(#2a3446, 40), frame_width = 1)
+
+f_row(int r, string k, string v, color c) =>
+    table.cell(dash, 0, r, k, text_color = color.new(#e6ecf5, 15), text_size = size.tiny, text_halign = text.align_left)
+    table.cell(dash, 1, r, v, text_color = c, text_size = size.tiny, text_halign = text.align_right)
+
+if barstate.islast and showLab
+    table.clear(dash, 0, 0, 1, 11)
+    f_row(0, "NIFTY OPT CONF", isCE ? "CE" : isPE ? "PE" : "?", color.aqua)
+    f_row(1, "Score now", str.tostring(buyVotes) + " buy / " + str.tostring(sellVotes) + " sell · need " + str.tostring(effMin), buyVotes >= effMin ? color.lime : #7f8b9e)
+    f_row(2, "Voting BUY", f_votes(), color.white)
+    f_row(3, "Underlying", undBull ? "Bullish" : undBear ? "Bearish" : "Flat", undBull ? color.lime : undBear ? color.red : #7f8b9e)
+    f_row(4, "Side / Filters", (sideOk ? "OK" : "BLOCKED") + " · " + (filtersOk ? "Clear" : "Filtered"), sideOk and filtersOk ? color.lime : color.orange)
+    f_row(5, "State", pos == 1 ? "IN BUY (green)" : "FLAT (red)", pos == 1 ? color.lime : color.red)
+    f_row(6, "TP / SL", str.tostring(tp1Pts,"#") + "/" + str.tostring(tp2Pts,"#") + "/" + str.tostring(tp3Pts,"#") + " · SL " + str.tostring(slPts,"#"), color.white)
+    f_row(7, "Trades / Wins / TP1", str.tostring(tradesDay) + " / " + str.tostring(winsDay) + " / " + str.tostring(tp1Hits), color.white)
+    f_row(8, "Net pts today*", str.tostring(pnlDay, "#.#"), pnlDay >= 0 ? color.lime : color.red)
+    if pos == 1 and not na(entryPx)
+        f_row(9, "Open P/L", str.tostring(close - entryPx, "#.#"), close >= entryPx ? color.lime : color.red)
+
+plot(emaF, "EMA9", color.new(color.yellow, 75))
+plot(vwapS, "VWAP", color.new(color.fuchsia, 55))
+
+alertcondition(buySignal, "Nifty Conf BUY", "BUY confluence on {{ticker}}")
+alertcondition(exitNow, "Nifty Conf SELL", "EXIT on {{ticker}}")
