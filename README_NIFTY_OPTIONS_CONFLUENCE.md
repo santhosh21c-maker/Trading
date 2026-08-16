@@ -1,49 +1,34 @@
-# Nifty Options Confluence v1.1 — TP1 lock (+10 minimum)
+# Nifty Options Confluence v1.1 — SL=18
 
-## What changed (your request)
+## Defaults now
 
-You asked to fine-tune so **every trade captures at least +10** (CE or PE).
+| Setting | Value |
+|---------|--------|
+| SL | **18** |
+| TP1 / TP2 / TP3 | **10 / 20 / 35** |
+| TP1 lock (full exit at +10) | **OFF** — use runners |
+| Hold to TP1 | ON |
+| After TP1 | SL → breakeven |
+| After TP2 | trail to entry+½·TP1 |
+| Min BUY score | **5** + require **E7** and **E3** |
 
-**Hard truth:** with any stop-loss, **100% of trades cannot be guaranteed +10** — if premium never reaches entry+10 and hits SL first, that trade loses. Removing SL would “force” +10-or-hold but allows unlimited loss.
+## SL=18 backtest snapshot (40 contracts · Apr–Jul 2025)
 
-**What we did instead:** maximize **TP1-first** rate and **book full size at +10**.
+| | Runners | TP1 lock |
+|--|--------:|---------:|
+| Trades | 128 | 130 |
+| Reach TP1 | **48 (38%)** | 49 (38%) |
+| Reach TP2 | **41 (32%)** | — |
+| Reach TP3 | **35 (27%)** | — |
+| SL exits | **80 (63%)** | 81 (62%) |
+| Calls / signal-day | **~1.2** | ~1.2 |
+| ATM calls / session-day | **~0.13** | ~0.13 |
+| Net | −185 (ATM only **+14**) | **−968** |
 
-## v1.1 defaults (from search)
-
-| Setting | Value | Why |
-|---------|--------|-----|
-| **TP1 lock mode** | ON | Exit **full** at TP1 → banks **+10** when hit |
-| **Hold to TP1** | ON | No confluence SELL before +10 |
-| **TP1** | **10** | Your minimum capture |
-| **SL** | **30** | Wider stop so +10 usually prints first |
-| **Min BUY score** | **5** | Fewer / cleaner entries |
-| **Require E7** | ON | ATR impulse — biggest filter lift |
-| **Require E3** | ON | VWAP reclaim gate |
-| Max entries / day | 3 | Avoid overtrading |
-
-## Search result (multi-strike sample)
-
-With score **5** + require **E7** + SL **30** + hold/exit at TP1:
-
-| Metric | Value |
-|--------|------:|
-| Trades | 12 |
-| Hit +10 before SL | **11 / 12 → ~91.7%** |
-| Net pts (sample) | **+80** |
-| Avg pts / trade | **+6.67** |
-
-Tighter SL (10–15) **destroys** the +10-first rate on the same entries. That is why losses were still appearing with SL=10.
+Full tables: `BACKTEST_SL18_REPORT.md`
 
 ## How to use
 
-1. Open your **Nifty CE or PE** chart (3m / 5m).
-2. Paste `Nifty_Options_Confluence.pine` (v1.1).
-3. Leave **TP1 lock mode** ON.
-4. Expect: **BUY → hold → SELL at TP1 +10**, or rare **SL −30**.
-5. Optional runners: turn **TP1 lock mode OFF**, enable BE/trail after TP1.
-
-## Files
-
-- `Nifty_Options_Confluence.pine` — indicator v1.1
-- `tp1_lock_search.csv` / `tp1_lock_best.json` — grid that produced these defaults
-- `BACKTEST_MULTISTRIKE_NIFTY.md` — earlier v1.0 multi-strike report (SL=10, more SL hits)
+1. Open Nifty CE/PE (3m/5m).
+2. Paste `Nifty_Options_Confluence.pine`.
+3. Leave **TP1 lock OFF**, **SL=18**, runners BE/trail ON.
