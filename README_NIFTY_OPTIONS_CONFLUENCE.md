@@ -1,42 +1,49 @@
-# Nifty Options Confluence — why Nifty was negative, and the fix
+# Nifty Options Confluence v1.1 — TP1 lock (+10 minimum)
 
-## Why Nifty looked negative before
+## What changed (your request)
 
-The first lab used **fixed TP1=+10 / SL=−12** on a **too-cheap synthetic Nifty premium** (~₹59) with **quiet 5m ranges** (~20 index pts/bar vs ~64 on BankNifty). Single engines over-traded and stopped out. That was a **model mismatch**, not proof that Nifty options cannot work.
+You asked to fine-tune so **every trade captures at least +10** (CE or PE).
 
-## Fix applied
+**Hard truth:** with any stop-loss, **100% of trades cannot be guaranteed +10** — if premium never reaches entry+10 and hits SL first, that trade loses. Removing SL would “force” +10-or-hold but allows unlimited loss.
 
-1. **Realistic Nifty ATM premium** (floor ~₹90, like weekly ATM).
-2. **Confluence** — several engines must agree before BUY.
-3. **Nifty risk**: SL **10** (not 12), TP1 **10** / TP2 **20** / TP3 **35**.
-4. **After TP1 → SL to breakeven** (protects the +10 path).
+**What we did instead:** maximize **TP1-first** rate and **book full size at +10**.
 
-## Confluence search result (Nifty CE+PE, ~60 sessions, 5m)
+## v1.1 defaults (from search)
 
-Best practical recipe matching your TP ladder (**lock TP1 ON**):
+| Setting | Value | Why |
+|---------|--------|-----|
+| **TP1 lock mode** | ON | Exit **full** at TP1 → banks **+10** when hit |
+| **Hold to TP1** | ON | No confluence SELL before +10 |
+| **TP1** | **10** | Your minimum capture |
+| **SL** | **30** | Wider stop so +10 usually prints first |
+| **Min BUY score** | **5** | Fewer / cleaner entries |
+| **Require E7** | ON | ATR impulse — biggest filter lift |
+| **Require E3** | ON | VWAP reclaim gate |
+| Max entries / day | 3 | Avoid overtrading |
 
-| Setting | Value |
-|---------|--------|
-| Engines | E1 + E3 + E5 + E7 + E8 + E14 + E15 + E21 |
-| Min score to BUY | **3** (use **4** if you want fewer / safer) |
-| Exit votes | 2 |
-| TP1 / TP2 / TP3 | **10 / 20 / 35** |
-| SL | **10** |
-| After TP1 | SL → breakeven |
-| Net (TP 10/20/35, SL10, min4, lock) | **≈ +20 pts** over sample, **~59% win rate** |
-| Tighter lock recipe (TP 8/16/28) | Higher win rate (~58–63%) but TP1≠10 |
+## Search result (multi-strike sample)
 
-Single-engine Nifty was mostly red; **confluence flips Nifty to net positive** in the same window.
+With score **5** + require **E7** + SL **30** + hold/exit at TP1:
+
+| Metric | Value |
+|--------|------:|
+| Trades | 12 |
+| Hit +10 before SL | **11 / 12 → ~91.7%** |
+| Net pts (sample) | **+80** |
+| Avg pts / trade | **+6.67** |
+
+Tighter SL (10–15) **destroys** the +10-first rate on the same entries. That is why losses were still appearing with SL=10.
 
 ## How to use
 
-1. Open a **Nifty CE or PE** chart (3m or 5m recommended).
-2. Paste `Nifty_Options_Confluence.pine`.
-3. Leave defaults; raise **Min engines to BUY** to **4** if too many signals.
-4. Green = in trade · Red = flat. CE/PE sync keeps sides matched to underlying bias.
+1. Open your **Nifty CE or PE** chart (3m / 5m).
+2. Paste `Nifty_Options_Confluence.pine` (v1.1).
+3. Leave **TP1 lock mode** ON.
+4. Expect: **BUY → hold → SELL at TP1 +10**, or rare **SL −30**.
+5. Optional runners: turn **TP1 lock mode OFF**, enable BE/trail after TP1.
 
 ## Files
 
-- `Nifty_Options_Confluence.pine` — the indicator
-- `nifty_confluence_search.csv` — full search grid
-- `backtest_options_engines_lab.py` — earlier single-engine lab (reference)
+- `Nifty_Options_Confluence.pine` — indicator v1.1
+- `tp1_lock_search.csv` / `tp1_lock_best.json` — grid that produced these defaults
+- `BACKTEST_MULTISTRIKE_NIFTY.md` — earlier v1.0 multi-strike report (SL=10, more SL hits)
