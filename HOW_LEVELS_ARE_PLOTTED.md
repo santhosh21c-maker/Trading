@@ -50,44 +50,30 @@ Anchors from Target 1 labels: **H = 24395.85**, **L = 24311.45**
 
 ---
 
-## Claim B — What are H and L? (corrected)
+## Claim B — What are H and L? (**OPEN — not settled**)
 
-### Falsification of “prior session High / Low” on this index chart
+Reproducing Decider from Target 1 only confirms Claim A. It does **not** explain the vendor’s anchors.
 
-NSE Nifty 50 official daily:
+### Put-call structure (missed earlier; now verified)
 
-| Date | Open | High | Low | Close |
-|---|---:|---:|---:|---:|
-| 2026-08-12 | 24472.45 | 24473.30 | 24265.95 | 24435.95 |
-| 2026-08-13 | 24431.60 | **24431.60** | **24311.40** | **24395.85** |
-| 2026-08-14 | 24361.90 | 24405.20 | 24296.80 | 24366.00 |
-
-14 Aug vendor Target 1 = **24395.85 / 24311.45**.
-
-| Hypothesis | Predicted T1 | vs vendor | Result |
-|---|---|---|---|
-| Prior **High / Low** (13 Aug) | 24431.60 / 24311.40 | H off by **+35.75** | **FAIL** |
-| Prior **Close / Low** (13 Aug) | 24395.85 / 24311.40 | H exact, L within 0.05 | **PASS** (this sample) |
-
-So on **this index chart**, INDIAN anchors behave as:
+Same-strike CE+PE are **one index ladder**, not two puzzles:
 
 ```
-H = prior NSE session Close
-L = prior NSE session Low
+Ci = K + (Cc − Cp)      // index centre
+Bi = Bc + Bp            // index base
 ```
 
-not prior High/Low.
+Report checks: Nifty 24350 → Ci=24376.050, Bi=59.050; Sensex 78800 → 78828.225 / 65.375 (exact).
 
-### Why “13 Aug candles pierce T1” does not settle Claim B
+### Prior Close/Low — withdrawn as a general claim
 
-Vendor lines are usually **today’s frozen ladder drawn across history**.  
-14 Aug’s T1 band painted leftward over 13 Aug bars will be crossed by 13 Aug price without contradiction.  
-The OHLC test above is the proper falsifier.
+- Matched **one** direct Nifty index screenshot (14 Aug T1 = prior Close/Low).  
+- Fails on option OHLC.  
+- Fails on the **put-call-reconstructed** index ladder from the 24350 pair (T1≈24435/24317 ≠ Close/Low).  
 
-### Options charts (earlier work)
+Treat Close/Low as a failed-or-partial hypothesis, not the answer.
 
-On CE/PE screenshots we matched Target 1 labels to a prior-session premium range and verified Claim A the same way.  
-Whether that option range was High/Low vs Close/Low was **not** locked with exchange OHLC in the same way as this index test. Treat option H/L source as **still open** until checked the same way.
+**Practical:** paste vendor Target 1 into **Manual H/L**. Research H/L provenance separately (prefer the put-call index view).
 
 ---
 

@@ -1,22 +1,22 @@
 //@version=6
 // Smart Robotic Logic - Decider and Targets Educational recreation
 //
-// HOW LEVELS ARE PLOTTED — see HOW_LEVELS_ARE_PLOTTED.md
+// HOW LEVELS ARE PLOTTED — see HOW_LEVELS_ARE_PLOTTED.md · CONCEPT_DECIDER_TARGETS.md
 //
-// TWO CLAIMS (keep separate):
-//   A) Ladder algebra (verified): C=(H+L)/2, B=(H-L)/2
-//      Decider = C ± 0.06·B
-//      Targets = C ± {1.00, 1.54, 1.83, 2.08}·B  → T1 labels ARE the anchors H/L
-//   B) What H/L are (testable): on Nifty INDEX 14 Aug 2026, vendor T1 matched
-//      prior Close/Low (24395.85 / 24311.40), NOT prior High/Low (24431.60 / …).
-//      Default INDIAN source: Prev Close + Prev Low (chart scan).
-//      If auto still disagrees with vendor: Manual Target 1 = paste vendor T1.
+// CLAIM A (solid): given anchors H/L (= Target 1 labels)
+//   C=(H+L)/2 , B=(H-L)/2
+//   Decider = C ± 0.06·B
+//   Targets = C ± {1.00, 1.54, 1.83, 2.08}·B
+//
+// CLAIM B (OPEN): where H/L come from is NOT settled.
+//   Prior Close/Low matched one index screenshot but fails as a general rule
+//   (options OHLC mismatch; put-call-reconstructed index ladder ≠ Close/Low).
+//   Same-strike CE+PE encode one index ladder: Ci=K+(Cc-Cp), Bi=Bc+Bp.
+//   Practical: use Manual Target 1 to lock vendor prints.
 //
 // SEGMENTS:
 //   INDIAN - prior-day FROZEN. Extend = line length only.
 //   Robot Prediction - LIVE Extend window. Same ladder ratios.
-//
-// BUG FIXED: f_add_mins must use int division Ext50 OR 930-1005 not 1004-1037.
 
 indicator("Smart Robotic Logic - Decider and Targets", overlay = true, max_lines_count = 500, max_labels_count = 500, dynamic_requests = false)
 
@@ -25,11 +25,11 @@ enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("INDIAN - Index, Stock & Option", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
 extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain)
 anchorDate = input.time(timestamp("13 Aug 2026 00:00"), "Anchor Date", group = grpMain)
-indianHlSrc = input.string("Prev Close + Prev Low (chart)", "INDIAN H/L Source", options = ["Prev Close + Prev Low (chart)", "Prev Close + Prev Low (Daily)", "Prev NSE session High/Low", "Prev NSE session 5m High/Low", "Prior day OR 0930-1005", "Chart TF calendar High/Low", "Daily High/Low series", "Manual Target 1"], group = grpMain, tooltip = "INDEX 14 Aug 2026 vendor T1 matched prior Close/Low.\nChart scan is preferred over Daily series (TV Daily can drift on NSE).\nManual = paste vendor Target 1 High/Low if auto still disagrees.")
+indianHlSrc = input.string("Manual Target 1", "INDIAN H/L Source", options = ["Manual Target 1", "Prev Close + Prev Low (chart)", "Prev Close + Prev Low (Daily)", "Prev NSE session High/Low", "Prev NSE session 5m High/Low", "Prior day OR 0930-1005", "Chart TF calendar High/Low", "Daily High/Low series"], group = grpMain, tooltip = "H/L SOURCE IS UNSETTLED.\nBest match to vendor: paste Target 1 High/Low into Manual fields.\nAuto modes are experiments (Close/Low is NOT proven).")
 i_sess_a = input.int(915, "NSE session start HHMM", minval=900, maxval=1600, group = grpMain)
 i_sess_b = input.int(1530, "NSE session end HHMM", minval=900, maxval=1600, group = grpMain)
-i_manH = input.float(0.0, "Manual H = vendor Target 1 High", step=0.05, group = grpMain)
-i_manL = input.float(0.0, "Manual L = vendor Target 1 Low", step=0.05, group = grpMain)
+i_manH = input.float(148.35, "Manual H = vendor Target 1 High", step=0.05, group = grpMain)
+i_manL = input.float(114.0, "Manual L = vendor Target 1 Low", step=0.05, group = grpMain)
 i_showHlDbg = input.bool(true, "Show H/L source debug", group = grpMain)
 
 grpRobot = "Robot Prediction"
