@@ -1,0 +1,71 @@
+{
+  "symbol": "NIFTY",
+  "spot": 24296.2,
+  "expiry": "18-08-2026",
+  "fetched_at_utc": "2026-08-17 04:25:36 UTC",
+  "resistance": {
+    "strike": 24300,
+    "oi": 327953,
+    "chg": 278511
+  },
+  "support": {
+    "strike": 24300,
+    "oi": 332559,
+    "chg": 175560
+  },
+  "top_ce": [
+    {
+      "strike": 24300,
+      "oi": 327953,
+      "chg": 278511
+    },
+    {
+      "strike": 24400,
+      "oi": 306559,
+      "chg": 181870
+    },
+    {
+      "strike": 24500,
+      "oi": 284698,
+      "chg": 111432
+    },
+    {
+      "strike": 24350,
+      "oi": 234074,
+      "chg": 172216
+    },
+    {
+      "strike": 25000,
+      "oi": 165323,
+      "chg": -12841
+    }
+  ],
+  "top_pe": [
+    {
+      "strike": 24300,
+      "oi": 332559,
+      "chg": 175560
+    },
+    {
+      "strike": 24200,
+      "oi": 200159,
+      "chg": 88736
+    },
+    {
+      "strike": 24000,
+      "oi": 183216,
+      "chg": 7720
+    },
+    {
+      "strike": 24250,
+      "oi": 167365,
+      "chg": 107252
+    },
+    {
+      "strike": 24350,
+      "oi": 141463,
+      "chg": 36902
+    }
+  ],
+  "source": "NSE India option-chain (jugaad_data NSELive)"
+}

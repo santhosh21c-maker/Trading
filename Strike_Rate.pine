@@ -44,13 +44,12 @@
 //  assume entry at the signal bar's close with NO slippage and NO brokerage.
 //  Past behaviour is not a forecast. Position size accordingly.
 //
-//  OI WALLS (optional)
-//  Each day the script builds an ATM± strike ladder for your expiry, pulls
-//  open interest (or volume if OI is missing on TradingView), and marks:
-//    Max Put OI  → Support    Max Call OI → Resistance
-//  On an OPTION chart these are INDEX strikes (shown in the panel / labels),
-//  not premium price lines — the y-axis is premium, not Nifty points.
-//  Update the expiry (YYMMDD) when the contract rolls.
+//  OI WALLS
+//  TradingView Pine CANNOT fetch the internet. Real NSE OI is pulled by
+//  fetch_oi_walls.py and baked into this file (Support = max Put OI,
+//  Resistance = max Call OI). Re-run that script to refresh, then re-paste
+//  the indicator (or pull the updated raw file). On index/futures charts the
+//  walls plot as lines; on option charts they show in the panel / labels.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 indicator("STRIKE RATE", "STRIKE RATE", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, dynamic_requests = true)
@@ -88,14 +87,16 @@ tblSize   = input.string("Small", "Text size", options = ["Tiny", "Small", "Norm
 chartSig  = input.string("Two must agree", "Chart signals from", options = ["Any engine", "Two must agree", "Anchor", "Ignition", "Drift", "Surge"], group = G4, tooltip = "Drives BUY/EXIT labels, candle colour, live panel, alerts.\n\nTWO MUST AGREE — lab default. Strict confluence, ~1 signal/day class frequency on ATM.\nANY ENGINE — more signals, lower quality.\nOr follow a single named engine.\n\nDashboard always lists every enabled engine.")
 
 G5 = "⑤  OI walls (daily S/R)"
-useOI     = input.bool(true, "Show daily OI support / resistance", group = G5, tooltip = "Builds an ATM± strike ladder for the expiry below, reads OI (or volume fallback), and marks:\nMax Put OI = Support · Max Call OI = Resistance.\n\nShown in the live panel. On option charts these are INDEX strikes, not premium lines.")
-oiExpiry  = input.string("250731", "Expiry YYMMDD", group = G5, tooltip = "Example: 31 Jul 2025 → 250731.\nUpdate this when expiry rolls. Verify the built symbol exists in TradingView’s symbol search.")
-oiRoot    = input.string("AUTO", "Option root", options = ["AUTO", "NIFTY", "BANKNIFTY", "SENSEX"], group = G5, tooltip = "AUTO derives from the Index feed ticker.")
-oiStep    = input.int(0, "Strike step (0 = auto)", minval = 0, step = 50, group = G5, tooltip = "0 = Nifty 50 · BankNifty/Sensex 100.")
-oiSide    = input.int(5, "Strikes each side of ATM", minval = 2, maxval = 8, group = G5, tooltip = "5 → 11 strikes × CE+PE. Keep modest — each strike is a data request.")
-oiFmt     = input.string("YYMMDD + C/P + strike", "Symbol format", options = ["YYMMDD + C/P + strike", "YYMMDD + strike + CE/PE"], group = G5, tooltip = "Try the other format if walls stay blank — TV symbol naming differs by region/broker.")
-oiVolFB   = input.bool(true, "If OI blank, use volume as wall proxy", group = G5, tooltip = "Many NSE option feeds on TradingView lack openinterest. Volume walls are a proxy, not true OI.")
+useOI     = input.bool(true, "Show OI support / resistance", group = G5, tooltip = "Shows Support (max Put OI) and Resistance (max Call OI).\n\nONLINE (recommended): levels fetched from NSE and baked into this script via fetch_oi_walls.py — Pine cannot call the internet itself.\nTV ladder: optional fallback using TradingView option symbols.")
+oiSource  = input.string("Online NSE (baked)", "OI source", options = ["Online NSE (baked)", "TradingView ladder"], group = G5, tooltip = "Online NSE = last fetch from fetch_oi_walls.py (real NSE OI).\nRe-run that script (or ask the agent) to refresh.\nTV ladder needs expiry + working TV option symbols.")
+oiExpiry  = input.string("250731", "TV ladder expiry YYMMDD", group = G5, tooltip = "Only for TradingView ladder mode.")
+oiRoot    = input.string("AUTO", "Option root", options = ["AUTO", "NIFTY", "BANKNIFTY", "SENSEX"], group = G5)
+oiStep    = input.int(0, "Strike step (0 = auto)", minval = 0, step = 50, group = G5)
+oiSide    = input.int(5, "TV ladder: strikes each side", minval = 2, maxval = 8, group = G5)
+oiFmt     = input.string("YYMMDD + C/P + strike", "TV symbol format", options = ["YYMMDD + C/P + strike", "YYMMDD + strike + CE/PE"], group = G5)
+oiVolFB   = input.bool(true, "TV ladder: volume if OI blank", group = G5)
 showOiLbl = input.bool(true, "Label OI walls on chart", group = G5)
+plotOiLines = input.bool(true, "Plot lines when price looks like index", group = G5, tooltip = "If chart close > 1000 (index/futures scale), draw S/R lines at OI strikes.\nOn option premium charts, lines stay off — strikes show in the panel.")
 
 // ─────────────────────────── INTERNAL ───────────────────────────
 scanner = mode == "Scanner"
@@ -270,9 +271,18 @@ sideOK = side == "Auto" ? true : side == "Calls only" ? isCE : not isCE
 allow  = timeOK and syncOK and sideOK and premOK
 flatNow = sesOn and inFlat
 
-// ─────────────────────────── OI WALLS (daily) ───────────────────────────
-// Max Put OI → Support · Max Call OI → Resistance (index strikes).
-// On option charts these appear in the panel / labels — not as premium hlines.
+// ─────────────────────────── OI WALLS ───────────────────────────
+// Online NSE levels are baked by fetch_oi_walls.py (Pine cannot HTTP-fetch).
+// === ONLINE_OI_BEGIN (auto-filled by fetch_oi_walls.py) ===
+// Fetched 2026-08-17 04:25:36 UTC · NIFTY · expiry 18-08-2026 · spot 24296.2
+// Source: NSE India option-chain (jugaad_data NSELive)
+onlineOiSup = 24300.0
+onlineOiRes = 24300.0
+onlineOiSupLots = 332559
+onlineOiResLots = 327953
+onlineOiLabel = "NIFTY 18-08-2026"
+// === ONLINE_OI_END ===
+
 oiRootS = oiRoot == "AUTO" ? (str.contains(str.upper(undSym), "BANK") ? "BANKNIFTY" : str.contains(str.upper(undSym), "SENSEX") ? "SENSEX" : "NIFTY") : oiRoot
 oiStepS = oiStep > 0 ? oiStep : oiRootS == "NIFTY" ? 50 : 100
 spotD   = request.security(undSym, "D", close, barmerge.gaps_off, barmerge.lookahead_off)
@@ -297,7 +307,10 @@ float oiSumPe = 0.0
 int   oiFound = 0
 int   volFound = 0
 
-if useOI
+useOnline = useOI and oiSource == "Online NSE (baked)"
+useTvLadder = useOI and oiSource == "TradingView ladder"
+
+if useTvLadder
     for off = -8 to 8
         if math.abs(off) <= oiSide
             k = atmS + off * oiStepS
@@ -316,20 +329,29 @@ if useOI
                 peWallW := wP
                 peWallK := k
 
-oiPcr = oiSumCe > 0 ? oiSumPe / oiSumCe : na
-oiSrc = oiFound > 0 ? "OI" : volFound > 0 ? "Vol proxy" : "No data"
-oiSupTxt = useOI and not na(peWallK) ? str.tostring(peWallK) : "—"
-oiResTxt = useOI and not na(ceWallK) ? str.tostring(ceWallK) : "—"
+// Resolve final walls
+float oiSup = useOnline and onlineOiSup > 0 ? onlineOiSup : useTvLadder and not na(peWallK) ? float(peWallK) : na
+float oiRes = useOnline and onlineOiRes > 0 ? onlineOiRes : useTvLadder and not na(ceWallK) ? float(ceWallK) : na
+oiPcr = useTvLadder and oiSumCe > 0 ? oiSumPe / oiSumCe : na
+oiSrc = useOnline and onlineOiSup > 0 ? "NSE online" : useOnline ? "Fetch needed" : oiFound > 0 ? "TV OI" : volFound > 0 ? "TV vol" : "No data"
+oiSupTxt = not na(oiSup) ? str.tostring(oiSup, "#") : "—"
+oiResTxt = not na(oiRes) ? str.tostring(oiRes, "#") : "—"
+
+// Index-scale charts can draw real S/R lines; option premium charts cannot.
+indexScale = close > 1000
+plot(useOI and plotOiLines and indexScale and not na(oiSup) ? oiSup : na, "OI Support", color = color.new(#22d3ee, 0), style = plot.style_linebr, linewidth = 2)
+plot(useOI and plotOiLines and indexScale and not na(oiRes) ? oiRes : na, "OI Resistance", color = color.new(#fb7185, 0), style = plot.style_linebr, linewidth = 2)
 
 var label oiLabS = na
 var label oiLabR = na
 if useOI and showOiLbl and barstate.islast
     label.delete(oiLabS)
     label.delete(oiLabR)
-    if not na(peWallK)
-        oiLabS := label.new(bar_index, low, "OI S " + str.tostring(peWallK) + " (max PE " + oiSrc + ")", style = label.style_label_up, color = color.new(#22d3ee, 10), textcolor = color.black, size = size.small)
-    if not na(ceWallK)
-        oiLabR := label.new(bar_index, high, "OI R " + str.tostring(ceWallK) + " (max CE " + oiSrc + ")", style = label.style_label_down, color = color.new(#fb7185, 10), textcolor = color.white, size = size.small)
+    extra = useOnline ? (" · " + onlineOiLabel) : ""
+    if not na(oiSup)
+        oiLabS := label.new(bar_index, indexScale ? oiSup : low, "OI S " + oiSupTxt + " (max PE)" + extra, style = label.style_label_up, color = color.new(#22d3ee, 10), textcolor = color.black, size = size.small)
+    if not na(oiRes)
+        oiLabR := label.new(bar_index, indexScale ? oiRes : high, "OI R " + oiResTxt + " (max CE)" + extra, style = label.style_label_down, color = color.new(#fb7185, 10), textcolor = color.white, size = size.small)
 
 // ─────────────────────────── STATE ───────────────────────────
 var array<bool>  stIn  = array.new<bool>(9, false)
@@ -561,11 +583,11 @@ if showPnl and barstate.islast
     table.cell(pn, 1, 5, dIn ? str.tostring(dStp, "#.##") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
     oiBg = color.new(#0b1220, 10)
     table.cell(pn, 0, 6, "OI Support", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 6, useOI ? ("PE " + oiSupTxt) : "off", bgcolor = oiBg, text_color = #67e8f9, text_size = sz2)
+    table.cell(pn, 1, 6, useOI ? ("PE " + oiSupTxt + (useOnline and onlineOiSupLots > 0 ? " · " + str.tostring(onlineOiSupLots) : "")) : "off", bgcolor = oiBg, text_color = #67e8f9, text_size = sz2)
     table.cell(pn, 0, 7, "OI Resist", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 7, useOI ? ("CE " + oiResTxt) : "off", bgcolor = oiBg, text_color = #fda4af, text_size = sz2)
-    table.cell(pn, 0, 8, "OI PCR·src", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 8, useOI ? ((na(oiPcr) ? "—" : str.tostring(oiPcr, "#.##")) + " · " + oiSrc + " · ATM " + str.tostring(atmS)) : "off", bgcolor = oiBg, text_color = color.new(color.white, 20), text_size = sz2)
+    table.cell(pn, 1, 7, useOI ? ("CE " + oiResTxt + (useOnline and onlineOiResLots > 0 ? " · " + str.tostring(onlineOiResLots) : "")) : "off", bgcolor = oiBg, text_color = #fda4af, text_size = sz2)
+    table.cell(pn, 0, 8, "OI src", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 8, useOI ? (oiSrc + (useOnline ? " · " + onlineOiLabel : " · ATM " + str.tostring(atmS))) : "off", bgcolor = oiBg, text_color = color.new(color.white, 20), text_size = sz2)
 
 // ─────────────────────────── ALERTS ───────────────────────────
 alertcondition(justIn,  "Strike Rate — BUY",  "STRIKE RATE buy {{ticker}} at {{close}}")

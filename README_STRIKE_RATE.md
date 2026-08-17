@@ -39,6 +39,13 @@ Limits:
 - Symbol format can differ — switch **Symbol format** in settings if walls stay “No data”.
 - Not a substitute for Sensibull / NSE chain for full OI analytics.
 
+## Quick start
+
+1. Open an **ATM** option chart (5m view is fine; signals stay on 5m).
+2. Paste `Strike_Rate.pine`.
+3. Set **Index feed** → `NSE:NIFTY1!` (or BankNifty / Sensex futures).
+4. Under **⑤ OI walls**, set **Expiry YYMMDD** for the contract you trade.
+5. Leave other defaults. Green = in trade · pale green = T1 banked · red = flat.
 
 ## Files
 
