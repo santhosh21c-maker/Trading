@@ -89,14 +89,12 @@ Treat Close/Low as a failed-or-partial hypothesis, not the answer.
 ## How this script should be used
 
 1. Treat **ratios** (Claim A) as solid.  
-2. Pick an **H/L source** explicitly; do not assume “prior High/Low”.  
-3. For Nifty **index**, prefer **Prev Close + Prev Low** until a counter-example appears.  
-4. If auto anchors disagree with the vendor, set **Manual Target 1** to the vendor’s T1 High/Low and the rest of the ladder will follow Claim A.
-
----
+2. Treat **H/L source** (Claim B) as open — do not assume High/Low or Close/Low.  
+3. To match PxTrading: set **Manual Target 1** to the vendor’s T1 High/Low.  
+4. Same-strike CE+PE can be combined to recover the vendor’s **index** centre/base (`Ci=K+(Cc−Cp)`, `Bi=Bc+Bp`).  
 
 ## Quick self-check
 
-1. Read vendor Target 1 High/Low → those are anchors H, L.  
+1. Read vendor Target 1 High/Low → anchors H, L.  
 2. Recompute Decider with `C±0.06B` and T2–T4 with 1.54 / 1.83 / 2.08.  
-3. Separately compare H, L to prior Close/Low/High from the exchange — that tests Claim B only.
+3. Do **not** treat step 1 as proving the OHLC source — that needs a separate falsification.
