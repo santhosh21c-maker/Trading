@@ -1,0 +1,401 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+//  OPTIONS ENGINES LAB  ·  NSE / BSE CE-PE                          v1.0
+//  Options-chart only · One engine at a time · Buy = entry · Sell = exit
+//  Nifty · BankNifty · Sensex | 1m · 3m · 5m
+//  TP1 = 10 pts · TP2 = 20 · TP3 = 35 (premium points)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//  HOW TO USE
+//    1. Open a CE or PE chart (Nifty / BankNifty / Sensex option).
+//    2. Settings → pick ONE engine (Signal Lab).
+//    3. Green bars = in BUY (long premium). Red bars = flat / after SELL exit.
+//    4. CE/PE Sync ON → BUY only on CE when underlying bullish; PE when bearish.
+//
+//  PERFORMANCE
+//    Only the selected engine drives entries/exits. Chart stays fast.
+// ═══════════════════════════════════════════════════════════════════════════
+
+indicator("Options Engines Lab · CE/PE", shorttitle = "Opt Engines Lab", overlay = true,
+     max_labels_count = 300, max_lines_count = 100, max_bars_back = 500)
+
+gLab  = "①  Signal Lab (pick ONE engine)"
+gRisk = "②  Risk · SL / TP (option points)"
+gFil  = "③  Filters (NSE session)"
+gSync = "④  CE / PE sync + paint"
+gVis  = "⑤  Display"
+
+engine = input.string("E1 Swing Structure", "Active engine",
+     options = [
+         "E1 Swing Structure",
+         "E2 Opening Range Breakout",
+         "E3 VWAP Reclaim",
+         "E4 Prev Day High/Low Break",
+         "E5 Pullback Continuation",
+         "E6 EMA Stack Momentum",
+         "E7 ATR Expansion Impulse",
+         "E8 RSI Regime",
+         "E9 MACD Histogram",
+         "E10 Supertrend",
+         "E11 Engulf + Volume",
+         "E12 Rejection Wick Sweep",
+         "E13 Inside Bar Breakout",
+         "E14 Round Premium Levels",
+         "E15 Option CPR / Pivot",
+         "E16 Donchian Channel Break",
+         "E21 Bollinger Squeeze Break"
+     ],
+     tooltip = "One engine at a time. E17–E20 are filters/sync below.",
+     group = gLab)
+
+orbMins   = input.int(15, "E2 · OR minutes from 09:15", minval = 5, maxval = 45, group = gLab)
+emaFast   = input.int(9,  "EMA fast", minval = 3, group = gLab)
+emaMid    = input.int(21, "EMA mid", minval = 5, group = gLab)
+emaSlow   = input.int(50, "EMA slow", minval = 10, group = gLab)
+swingLen  = input.int(5,  "Swing / Donchian length", minval = 2, maxval = 30, group = gLab)
+rsiLen    = input.int(14, "RSI length", group = gLab)
+stAtr     = input.int(10, "Supertrend ATR length", group = gLab)
+stMult    = input.float(2.0, "Supertrend mult", step = 0.1, group = gLab)
+adxLen    = input.int(14, "ADX length (chop filter)", group = gLab)
+adxMin    = input.float(18.0, "Min ADX to allow entries", step = 0.5, group = gLab)
+
+tp1Pts = input.float(10.0, "TP1 (pts)", minval = 1, step = 0.5, group = gRisk)
+tp2Pts = input.float(20.0, "TP2 (pts)", minval = 1, step = 0.5, group = gRisk)
+tp3Pts = input.float(35.0, "TP3 (pts)", minval = 1, step = 0.5, group = gRisk)
+slMode = input.string("Fixed pts", "SL mode", options = ["Fixed pts", "Swing + buffer"], group = gRisk)
+slPts  = input.float(12.0, "SL fixed (pts)", minval = 1, step = 0.5, group = gRisk)
+slBuf  = input.float(3.0,  "SL swing buffer (pts)", minval = 0, step = 0.5, group = gRisk)
+cooldn = input.int(5, "Bars cooldown after exit", minval = 0, maxval = 50, group = gRisk)
+maxDay = input.int(6, "Max entries per day (0=off)", minval = 0, maxval = 30, group = gRisk)
+
+useSess  = input.bool(true, "E17 · Session gate", group = gFil)
+sess1    = input.session("0920-1115", "Morning window (Asia/Kolkata)", group = gFil)
+sess2    = input.session("1315-1505", "Afternoon window", group = gFil)
+useExp   = input.bool(true, "E18 · Block last-session window", group = gFil)
+blockEnd = input.session("1500-1530", "Late session block", group = gFil)
+useChop  = input.bool(true, "E19 · Chop filter (ADX)", group = gFil)
+
+useSync  = input.bool(true, "E20 · CE/PE sync (underlying bias)", group = gSync)
+biasTf   = input.timeframe("5", "Underlying bias TF", group = gSync)
+paintBars = input.bool(true, "Paint candles green/red by trade state", group = gSync)
+
+showLab  = input.bool(true, "E22 · Lab dashboard", group = gVis)
+showSig  = input.bool(true, "Entry / exit labels", group = gVis)
+showTgt  = input.bool(true, "Draw SL / TP lines while in trade", group = gVis)
+
+// ── Symbol / underlying ────────────────────────────────────────────────────
+tkr = syminfo.ticker
+isCE = str.endswith(tkr, "CE")
+isPE = str.endswith(tkr, "PE")
+isOpt = isCE or isPE
+
+f_underTicker() =>
+    str.contains(tkr, "BANKNIFTY") ? "NSE:BANKNIFTY" :
+       str.contains(tkr, "SENSEX")   ? "BSE:SENSEX"   :
+       str.contains(tkr, "NIFTY")    ? "NSE:NIFTY"    : syminfo.tickerid
+
+[uEmaF, uEmaS] = request.security(f_underTicker(), biasTf, [ta.ema(close, 9), ta.ema(close, 21)], lookahead = barmerge.lookahead_off)
+undBull = uEmaF > uEmaS
+undBear = uEmaF < uEmaS
+sideOk = not useSync or not isOpt or (isCE and undBull) or (isPE and undBear)
+
+// ── Shared series ──────────────────────────────────────────────────────────
+emaF = ta.ema(close, emaFast)
+emaM = ta.ema(close, emaMid)
+emaS = ta.ema(close, emaSlow)
+vwapS = ta.vwap
+atr  = ta.atr(14)
+atrAvg = ta.sma(atr, 20)
+rsi  = ta.rsi(close, rsiLen)
+[macdL, macdSig, macdH] = ta.macd(close, 12, 26, 9)
+[stLine, stDir] = ta.supertrend(stMult, stAtr)  // direction: -1 bull, +1 bear
+volMa = ta.sma(volume, 20)
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+var float lastSH = na
+var float lastSL = na
+if not na(ph)
+    lastSH := ph
+if not na(pl)
+    lastSL := pl
+
+dayChg = ta.change(time("D")) != 0
+[pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_off)
+
+orEndTot = 15 + orbMins
+orEndH = 9 + int(orEndTot / 60)
+orEndM = orEndTot % 60
+orSessStr = "0915-" + (orEndH < 10 ? "0" : "") + str.tostring(orEndH) + (orEndM < 10 ? "0" : "") + str.tostring(orEndM)
+inORWindow = not na(time(timeframe.period, orSessStr, "Asia/Kolkata"))
+
+var float orHi = na
+var float orLo = na
+if dayChg
+    orHi := na
+    orLo := na
+if inORWindow
+    orHi := na(orHi) ? high : math.max(orHi, high)
+    orLo := na(orLo) ? low  : math.min(orLo, low)
+
+inSess1 = not na(time(timeframe.period, sess1, "Asia/Kolkata"))
+inSess2 = not na(time(timeframe.period, sess2, "Asia/Kolkata"))
+sessOk  = not useSess or inSess1 or inSess2
+lateBlk = useExp and not na(time(timeframe.period, blockEnd, "Asia/Kolkata"))
+chopOk  = not useChop or nz(adxVal, 0) >= adxMin
+filtersOk = sessOk and not lateBlk and chopOk
+
+roundStep = close >= 100 ? 10.0 : close >= 40 ? 5.0 : 2.5
+rndBelow = math.floor(close / roundStep) * roundStep
+rndAbove = rndBelow + roundStep
+
+[cH, cL, cC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)
+cprP = (cH + cL + cC) / 3
+cprBC = (cH + cL) / 2
+cprTC = 2 * cprP - cprBC
+cprTop = math.max(cprTC, cprBC)
+cprBot = math.min(cprTC, cprBC)
+
+donHi = ta.highest(high, swingLen)[1]
+donLo = ta.lowest(low, swingLen)[1]
+
+basis = ta.sma(close, 20)
+dev   = 2.0 * ta.stdev(close, 20)
+bbU = basis + dev
+bbL = basis - dev
+bbW = basis != 0 ? (bbU - bbL) / basis * 100 : 0.0
+bbWMa = ta.sma(bbW, 50)
+squeeze = bbW < bbWMa * 0.75
+
+bullEng = close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
+bearEng = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
+volOk   = volume > volMa * 1.2
+
+rng = high - low
+loWick = rng > 0 ? (math.min(open, close) - low) / rng : 0.0
+upWick = rng > 0 ? (high - math.max(open, close)) / rng : 0.0
+bullSweep = loWick >= 0.55 and close > open and close > close[1]
+bearSweep = upWick >= 0.55 and close < open and close < close[1]
+
+inside = high < high[1] and low > low[1]
+motherHi = high[1]
+motherLo = low[1]
+
+emaStackUp = emaF > emaM and emaM > emaS and emaF > emaF[1]
+emaStackDn = emaF < emaM and emaM < emaS and emaF < emaF[1]
+
+// ── Active engine only ─────────────────────────────────────────────────────
+bool rawBuy  = false
+bool rawSell = false
+
+if engine == "E1 Swing Structure"
+    rawBuy  := not na(lastSH) and close > lastSH and close > open
+    rawSell := not na(lastSL) and close < lastSL
+else if engine == "E2 Opening Range Breakout"
+    rawBuy  := not na(orHi) and not inORWindow and close > orHi and close[1] <= orHi
+    rawSell := not na(orLo) and (close < orLo or close < vwapS)
+else if engine == "E3 VWAP Reclaim"
+    rawBuy  := close > vwapS and close[1] <= vwapS and close > open
+    rawSell := close < vwapS and close[1] >= vwapS
+else if engine == "E4 Prev Day High/Low Break"
+    rawBuy  := not na(pdH) and close > pdH and close[1] <= pdH
+    rawSell := not na(pdL) and close < pdL
+else if engine == "E5 Pullback Continuation"
+    rawBuy  := emaStackUp and low <= emaF and close > emaF and close > open
+    rawSell := close < emaM
+else if engine == "E6 EMA Stack Momentum"
+    rawBuy  := emaStackUp and not emaStackUp[1]
+    rawSell := emaStackDn
+else if engine == "E7 ATR Expansion Impulse"
+    rawBuy  := atr > atrAvg and close > open and (close - open) > atr * 0.6 and close > close[1]
+    rawSell := atr < atrAvg or (close < open and (open - close) > atr * 0.5)
+else if engine == "E8 RSI Regime"
+    rawBuy  := rsi > 50 and rsi[1] <= 50 and close > emaF
+    rawSell := rsi < 50 and rsi[1] >= 50
+else if engine == "E9 MACD Histogram"
+    rawBuy  := macdH > 0 and macdH[1] <= 0
+    rawSell := macdH < 0 and macdH[1] >= 0
+else if engine == "E10 Supertrend"
+    rawBuy  := stDir == -1 and stDir[1] == 1
+    rawSell := stDir == 1 and stDir[1] == -1
+else if engine == "E11 Engulf + Volume"
+    rawBuy  := bullEng and volOk
+    rawSell := bearEng
+else if engine == "E12 Rejection Wick Sweep"
+    rawBuy  := bullSweep
+    rawSell := bearSweep
+else if engine == "E13 Inside Bar Breakout"
+    rawBuy  := inside[1] and close > motherHi and close > open
+    rawSell := inside[1] and close < motherLo
+else if engine == "E14 Round Premium Levels"
+    rawBuy  := low <= rndBelow and close > rndBelow and close > open
+    rawSell := high >= rndAbove and close < rndAbove
+else if engine == "E15 Option CPR / Pivot"
+    rawBuy  := close > cprTop and close[1] <= cprTop
+    rawSell := close < cprBot
+else if engine == "E16 Donchian Channel Break"
+    rawBuy  := close > donHi and close > open
+    rawSell := close < donLo
+else if engine == "E21 Bollinger Squeeze Break"
+    rawBuy  := squeeze[1] and not squeeze and close > bbU
+    rawSell := close < basis
+
+// ── Position state ─────────────────────────────────────────────────────────
+var int   pos       = 0
+var float entryPx   = na
+var float slPx      = na
+var float tp1Px     = na
+var float tp2Px     = na
+var float tp3Px     = na
+var int   entryBar  = na
+var int   lastExit  = -999
+var int   tradesDay = 0
+var int   winsDay   = 0
+var int   tp1Hits   = 0
+var int   tp2Hits   = 0
+var int   tp3Hits   = 0
+var float pnlDay    = 0.0
+var bool  hitTP1    = false
+var bool  hitTP2    = false
+
+if dayChg
+    tradesDay := 0
+    winsDay   := 0
+    tp1Hits   := 0
+    tp2Hits   := 0
+    tp3Hits   := 0
+    pnlDay    := 0.0
+
+dayCapOk = maxDay == 0 or tradesDay < maxDay
+coolOk   = bar_index - lastExit >= cooldn
+
+buySignal = barstate.isconfirmed and pos == 0 and rawBuy and filtersOk and sideOk and dayCapOk and coolOk
+
+f_sl(float ent) =>
+    if slMode == "Fixed pts"
+        ent - slPts
+    else
+        swing = na(lastSL) ? low : math.min(lastSL, low)
+        math.min(swing - slBuf, ent - slPts * 0.5)
+
+if buySignal
+    pos      := 1
+    entryPx  := close
+    slPx     := f_sl(close)
+    tp1Px    := close + tp1Pts
+    tp2Px    := close + tp2Pts
+    tp3Px    := close + tp3Pts
+    entryBar := bar_index
+    hitTP1   := false
+    hitTP2   := false
+    tradesDay += 1
+    if showSig
+        label.new(bar_index, low, "BUY\n" + str.tostring(close, format.mintick),
+             style = label.style_label_up, color = color.new(color.green, 0),
+             textcolor = color.white, size = size.small)
+
+bool exitNow = false
+string exitWhy = ""
+float exitPxMark = na
+
+if pos == 1 and barstate.isconfirmed
+    if rawSell
+        exitNow := true
+        exitWhy := "Engine SELL"
+        exitPxMark := close
+    if low <= slPx
+        exitNow := true
+        exitWhy := "SL"
+        exitPxMark := slPx
+    if not hitTP1 and high >= tp1Px
+        hitTP1 := true
+        tp1Hits += 1
+        if showSig
+            label.new(bar_index, tp1Px, "TP1 +" + str.tostring(tp1Pts, "#.#"),
+                 style = label.style_label_left, color = color.new(color.teal, 20),
+                 textcolor = color.white, size = size.tiny)
+    if hitTP1 and not hitTP2 and high >= tp2Px
+        hitTP2 := true
+        tp2Hits += 1
+        if showSig
+            label.new(bar_index, tp2Px, "TP2 +" + str.tostring(tp2Pts, "#.#"),
+                 style = label.style_label_left, color = color.new(color.blue, 20),
+                 textcolor = color.white, size = size.tiny)
+    if high >= tp3Px
+        exitNow := true
+        exitWhy := "TP3"
+        exitPxMark := tp3Px
+        tp3Hits += 1
+
+if exitNow and pos == 1
+    exitPx = nz(exitPxMark, close)
+    tradePnl = exitPx - entryPx
+    pnlDay += tradePnl
+    if tradePnl > 0 or hitTP1
+        winsDay += 1
+    if showSig
+        label.new(bar_index, high, "SELL · " + exitWhy + "\n" + str.tostring(tradePnl, "#.#") + " pts",
+             style = label.style_label_down,
+             color = tradePnl >= 0 ? color.new(color.maroon, 10) : color.new(color.red, 0),
+             textcolor = color.white, size = size.small)
+    pos      := 0
+    lastExit := bar_index
+    entryPx  := na
+    slPx     := na
+    tp1Px    := na
+    tp2Px    := na
+    tp3Px    := na
+
+var line lnSL = na
+var line lnT1 = na
+var line lnT2 = na
+var line lnT3 = na
+var line lnEn = na
+
+if barstate.islast
+    line.delete(lnSL)
+    line.delete(lnT1)
+    line.delete(lnT2)
+    line.delete(lnT3)
+    line.delete(lnEn)
+    if showTgt and pos == 1 and not na(entryPx)
+        x1 = nz(entryBar, bar_index)
+        x2 = bar_index + 3
+        lnEn := line.new(x1, entryPx, x2, entryPx, color = color.white, style = line.style_dotted)
+        lnSL := line.new(x1, slPx, x2, slPx, color = color.red, width = 2)
+        lnT1 := line.new(x1, tp1Px, x2, tp1Px, color = color.teal, width = 1)
+        lnT2 := line.new(x1, tp2Px, x2, tp2Px, color = color.blue, width = 1)
+        lnT3 := line.new(x1, tp3Px, x2, tp3Px, color = color.fuchsia, width = 1)
+
+barcolor(paintBars ? (pos == 1 ? color.new(color.green, 0) : color.new(color.red, 30)) : na)
+
+var table dash = table.new(position.top_right, 2, 14, bgcolor = color.new(#0b0e15, 10),
+     frame_color = color.new(#2a3446, 40), frame_width = 1)
+
+f_row(int r, string k, string v, color c) =>
+    table.cell(dash, 0, r, k, text_color = color.new(#e6ecf5, 15), text_size = size.tiny, text_halign = text.align_left)
+    table.cell(dash, 1, r, v, text_color = c, text_size = size.tiny, text_halign = text.align_right)
+
+if barstate.islast and showLab
+    table.clear(dash, 0, 0, 1, 13)
+    f_row(0, "OPTIONS LAB", isCE ? "CE" : isPE ? "PE" : "Not option?", isOpt ? color.lime : color.orange)
+    f_row(1, "Engine", engine, color.aqua)
+    f_row(2, "Underlying", undBull ? "Bullish" : undBear ? "Bearish" : "Flat", undBull ? color.lime : undBear ? color.red : #7f8b9e)
+    f_row(3, "Side OK", sideOk ? "Buys allowed" : "Sync blocks", sideOk ? color.lime : color.orange)
+    f_row(4, "Filters", filtersOk ? "Clear" : not sessOk ? "Session" : lateBlk ? "Late block" : "Chop", filtersOk ? color.lime : color.orange)
+    f_row(5, "State", pos == 1 ? "IN BUY (green)" : "FLAT / after SELL (red)", pos == 1 ? color.lime : color.red)
+    f_row(6, "TP1 / TP2 / TP3", str.tostring(tp1Pts, "#") + " / " + str.tostring(tp2Pts, "#") + " / " + str.tostring(tp3Pts, "#"), color.white)
+    f_row(7, "Trades today", str.tostring(tradesDay), color.white)
+    f_row(8, "Wins / TP1", str.tostring(winsDay) + " / " + str.tostring(tp1Hits), color.lime)
+    f_row(9, "TP2 / TP3", str.tostring(tp2Hits) + " / " + str.tostring(tp3Hits), color.aqua)
+    f_row(10, "Net pts today", str.tostring(pnlDay, "#.#"), pnlDay >= 0 ? color.lime : color.red)
+    if pos == 1 and not na(entryPx)
+        f_row(11, "Open P/L pts", str.tostring(close - entryPx, "#.#"), close >= entryPx ? color.lime : color.red)
+
+plot(emaF, "EMA fast", color.new(color.yellow, 70))
+plot(engine == "E3 VWAP Reclaim" or engine == "E5 Pullback Continuation" ? vwapS : na, "VWAP", color.new(color.fuchsia, 40))
+plot(engine == "E10 Supertrend" ? stLine : na, "Supertrend", color.new(color.orange, 30))
+
+alertcondition(buySignal, "Options Lab BUY", "BUY {{ticker}} · Options Engines Lab")
+alertcondition(exitNow, "Options Lab SELL exit", "SELL/EXIT {{ticker}} · Options Engines Lab")
