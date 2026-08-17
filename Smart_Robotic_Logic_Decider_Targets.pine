@@ -431,7 +431,7 @@ var int frozenDayKey = -1
 var float frozenManH = na
 var float frozenManL = na
 
-srcFlag = indianHlSrc == "Manual Target 1" ? 5 : indianHlSrc == "Prev NSE session 5m" ? 4 : indianHlSrc == "Prior day OR 0930-1005" ? 3 : indianHlSrc == "Chart TF calendar scan" ? 2 : indianHlSrc == "Daily series" ? 1 : 0
+srcFlag = indianHlSrc == "Manual Target 1" ? 6 : indianHlSrc == "Prev Close + Prev Low (Daily)" ? 5 : indianHlSrc == "Prev NSE session 5m High/Low" ? 4 : indianHlSrc == "Prior day OR 0930-1005" ? 3 : indianHlSrc == "Chart TF calendar High/Low" ? 2 : indianHlSrc == "Daily High/Low series" ? 1 : 0
 forceFlag = forceRecalc ? 1 : 0
 dayKey = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
 hlDrift = not na(frozenH) and not na(rawH) and (math.abs(frozenH - rawH) > syminfo.mintick or math.abs(frozenL - rawL) > syminfo.mintick)
