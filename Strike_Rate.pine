@@ -274,12 +274,12 @@ flatNow = sesOn and inFlat
 // ─────────────────────────── OI WALLS ───────────────────────────
 // Online NSE levels are baked by fetch_oi_walls.py (Pine cannot HTTP-fetch).
 // === ONLINE_OI_BEGIN (auto-filled by fetch_oi_walls.py) ===
-// Fetched 2026-08-17 04:25:36 UTC · NIFTY · expiry 18-08-2026 · spot 24296.2
+// Fetched 2026-08-17 04:25:44 UTC · NIFTY · expiry 18-08-2026 · spot 24300.35
 // Source: NSE India option-chain (jugaad_data NSELive)
 onlineOiSup = 24300.0
-onlineOiRes = 24300.0
-onlineOiSupLots = 332559
-onlineOiResLots = 327953
+onlineOiRes = 24400.0
+onlineOiSupLots = 333776
+onlineOiResLots = 305649
 onlineOiLabel = "NIFTY 18-08-2026"
 // === ONLINE_OI_END ===
 
