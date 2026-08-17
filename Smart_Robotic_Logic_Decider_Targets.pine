@@ -3,14 +3,14 @@
 //
 // HOW LEVELS ARE PLOTTED — see HOW_LEVELS_ARE_PLOTTED.md
 //
-// LADDER verified on PxTrading INDIAN 12 Aug + 13 Aug 2026 CALL/PUT:
-//   H/L = prior session day high/low of this symbol  Target 1 = H/L
-//   C = H+L / 2 , B = H-L / 2
-//   Decider = C +/- 0.06*B
-//   Targets = C +/- 1.00, 1.54, 1.83, 2.08 * B
-//
-// 13 Aug CALL CE24400 vendor Target 1: H=148.33 L=114
-// If auto H/L wrong: set INDIAN H/L Source = Manual Target 1 and type vendor T1.
+// TWO CLAIMS (keep separate):
+//   A) Ladder algebra (verified): C=(H+L)/2, B=(H-L)/2
+//      Decider = C ± 0.06·B
+//      Targets = C ± {1.00, 1.54, 1.83, 2.08}·B  → T1 labels ARE the anchors H/L
+//   B) What H/L are (testable): on Nifty INDEX 14 Aug 2026, vendor T1 matched
+//      prior Close/Low (24395.85 / 24311.40), NOT prior High/Low (24431.60 / …).
+//      Default INDIAN source is therefore Prev Close + Prev Low (Daily).
+//      Options H/L provenance still open — use Manual Target 1 if auto drifts.
 //
 // SEGMENTS:
 //   INDIAN - prior-day FROZEN. Extend = line length only.
@@ -25,7 +25,7 @@ enableLevels = input.bool(true, "Enable Automated Levels", group = grpMain)
 segment = input.string("INDIAN - Index, Stock & Option", "Segment", options = ["INDIAN - Index, Stock & Option", "Robot Prediction"], group = grpMain)
 extendIn = input.int(50, "Extend", minval = 2, maxval = 500, group = grpMain)
 anchorDate = input.time(timestamp("13 Aug 2026 00:00"), "Anchor Date", group = grpMain)
-indianHlSrc = input.string("Prev NSE session", "INDIAN H/L Source", options = ["Prev NSE session", "Prev NSE session 5m", "Prior day OR 0930-1005", "Chart TF calendar scan", "Daily series", "Manual Target 1"], group = grpMain)
+indianHlSrc = input.string("Prev Close + Prev Low (Daily)", "INDIAN H/L Source", options = ["Prev Close + Prev Low (Daily)", "Prev NSE session High/Low", "Prev NSE session 5m High/Low", "Prior day OR 0930-1005", "Chart TF calendar High/Low", "Daily High/Low series", "Manual Target 1"], group = grpMain, tooltip = "INDEX test 14 Aug 2026: vendor T1 = prior Close/Low, not High/Low.\nHigh/Low options kept for experiments / options charts.\nManual = paste vendor Target 1 High/Low.")
 i_sess_a = input.int(915, "NSE session start HHMM", minval=900, maxval=1600, group = grpMain)
 i_sess_b = input.int(1530, "NSE session end HHMM", minval=900, maxval=1600, group = grpMain)
 i_manH = input.float(0.0, "Manual H = vendor Target 1 High", step=0.05, group = grpMain)
@@ -198,6 +198,7 @@ f_prior_or_hl(int orStart, int orEnd) =>
 [hOrOwn, lOrOwn] = f_prior_or_hl(930, 1005)
 float hDayD = request.security(syminfo.tickerid, "D", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 float lDayD = request.security(syminfo.tickerid, "D", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+float cDayD = request.security(syminfo.tickerid, "D", close[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 
 f_trim_hl(float[] hs, float[] ls, float trimHighPct, float trimLowPct) =>
     float hOut = na
@@ -373,30 +374,36 @@ f_robot_hl(int len, int startHhmm, int orSkip, string mode, string hSrc, string 
 
 [hRob, lRob, nRob, i0, i1, lagUsed, winBranch] = f_robot_hl(extendIn, robotStartHhmm, robotOrSkipMins, robotMode, robotHSource, robotLSource, robotLagManual, robotTrimHighPct, robotTrimLowPct)
 
-// INDIAN H/L pick — Target 1 MUST equal this H/L for ladder to match vendor
+// INDIAN H/L pick — Target 1 equals these anchors; ratios build the rest
 float indianH = na
 float indianL = na
 if indianHlSrc == "Manual Target 1" and i_manH > i_manL and i_manL > 0
     indianH := i_manH
     indianL := i_manL
-else if indianHlSrc == "Prev NSE session 5m"
+else if indianHlSrc == "Prev Close + Prev Low (Daily)"
+    indianH := cDayD
+    indianL := lDayD
+else if indianHlSrc == "Prev NSE session 5m High/Low"
     indianH := hSess5
     indianL := lSess5
 else if indianHlSrc == "Prior day OR 0930-1005"
     indianH := hOrOwn
     indianL := lOrOwn
-else if indianHlSrc == "Chart TF calendar scan"
+else if indianHlSrc == "Chart TF calendar High/Low"
     indianH := hDayOwn
     indianL := lDayOwn
-else if indianHlSrc == "Daily series"
+else if indianHlSrc == "Daily High/Low series"
     indianH := hDayD
     indianL := lDayD
 else
-    // Prev NSE session default
+    // Prev NSE session High/Low
     indianH := hSessOwn
     indianL := lSessOwn
 
 // Fallbacks if chosen source empty
+if na(indianH) or na(indianL) or indianH <= indianL
+    indianH := cDayD
+    indianL := lDayD
 if na(indianH) or na(indianL) or indianH <= indianL
     indianH := na(hSessOwn) ? hSess5 : hSessOwn
     indianL := na(lSessOwn) ? lSess5 : lSessOwn
