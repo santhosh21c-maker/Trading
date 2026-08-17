@@ -43,9 +43,17 @@
 //  DASHBOARD figures are calculated on the bars loaded on your chart. They
 //  assume entry at the signal bar's close with NO slippage and NO brokerage.
 //  Past behaviour is not a forecast. Position size accordingly.
+//
+//  OI WALLS (optional)
+//  Each day the script builds an ATM± strike ladder for your expiry, pulls
+//  open interest (or volume if OI is missing on TradingView), and marks:
+//    Max Put OI  → Support    Max Call OI → Resistance
+//  On an OPTION chart these are INDEX strikes (shown in the panel / labels),
+//  not premium price lines — the y-axis is premium, not Nifty points.
+//  Update the expiry (YYMMDD) when the contract rolls.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("STRIKE RATE", "STRIKE RATE", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
+indicator("STRIKE RATE", "STRIKE RATE", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, dynamic_requests = true)
 
 // ─────────────────────────── SETTINGS ───────────────────────────
 G1 = "①  Setup"
@@ -78,6 +86,16 @@ showZone  = input.bool(true, "Draw target / stop zones", group = G4)
 tblPos    = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G4)
 tblSize   = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G4)
 chartSig  = input.string("Two must agree", "Chart signals from", options = ["Any engine", "Two must agree", "Anchor", "Ignition", "Drift", "Surge"], group = G4, tooltip = "Drives BUY/EXIT labels, candle colour, live panel, alerts.\n\nTWO MUST AGREE — lab default. Strict confluence, ~1 signal/day class frequency on ATM.\nANY ENGINE — more signals, lower quality.\nOr follow a single named engine.\n\nDashboard always lists every enabled engine.")
+
+G5 = "⑤  OI walls (daily S/R)"
+useOI     = input.bool(true, "Show daily OI support / resistance", group = G5, tooltip = "Builds an ATM± strike ladder for the expiry below, reads OI (or volume fallback), and marks:\nMax Put OI = Support · Max Call OI = Resistance.\n\nShown in the live panel. On option charts these are INDEX strikes, not premium lines.")
+oiExpiry  = input.string("250731", "Expiry YYMMDD", group = G5, tooltip = "Example: 31 Jul 2025 → 250731.\nUpdate this when expiry rolls. Verify the built symbol exists in TradingView’s symbol search.")
+oiRoot    = input.string("AUTO", "Option root", options = ["AUTO", "NIFTY", "BANKNIFTY", "SENSEX"], group = G5, tooltip = "AUTO derives from the Index feed ticker.")
+oiStep    = input.int(0, "Strike step (0 = auto)", minval = 0, step = 50, group = G5, tooltip = "0 = Nifty 50 · BankNifty/Sensex 100.")
+oiSide    = input.int(5, "Strikes each side of ATM", minval = 2, maxval = 8, group = G5, tooltip = "5 → 11 strikes × CE+PE. Keep modest — each strike is a data request.")
+oiFmt     = input.string("YYMMDD + C/P + strike", "Symbol format", options = ["YYMMDD + C/P + strike", "YYMMDD + strike + CE/PE"], group = G5, tooltip = "Try the other format if walls stay blank — TV symbol naming differs by region/broker.")
+oiVolFB   = input.bool(true, "If OI blank, use volume as wall proxy", group = G5, tooltip = "Many NSE option feeds on TradingView lack openinterest. Volume walls are a proxy, not true OI.")
+showOiLbl = input.bool(true, "Label OI walls on chart", group = G5)
 
 // ─────────────────────────── INTERNAL ───────────────────────────
 scanner = mode == "Scanner"
@@ -251,6 +269,67 @@ syncOK = nz(corr) * sgn >= 0.30
 sideOK = side == "Auto" ? true : side == "Calls only" ? isCE : not isCE
 allow  = timeOK and syncOK and sideOK and premOK
 flatNow = sesOn and inFlat
+
+// ─────────────────────────── OI WALLS (daily) ───────────────────────────
+// Max Put OI → Support · Max Call OI → Resistance (index strikes).
+// On option charts these appear in the panel / labels — not as premium hlines.
+oiRootS = oiRoot == "AUTO" ? (str.contains(str.upper(undSym), "BANK") ? "BANKNIFTY" : str.contains(str.upper(undSym), "SENSEX") ? "SENSEX" : "NIFTY") : oiRoot
+oiStepS = oiStep > 0 ? oiStep : oiRootS == "NIFTY" ? 50 : 100
+spotD   = request.security(undSym, "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+atmS    = int(math.round(nz(spotD) / oiStepS) * oiStepS)
+expS    = str.tostring(oiExpiry)
+
+f_optSym(int k, bool isCall) =>
+    oiFmt == "YYMMDD + C/P + strike" ? ("NSE:" + oiRootS + expS + (isCall ? "C" : "P") + str.tostring(k)) : ("NSE:" + oiRootS + expS + str.tostring(k) + (isCall ? "CE" : "PE"))
+
+f_wall(string sym) =>
+    [oi, vol] = request.security(sym, "D", [openinterest, volume], ignore_invalid_symbol = true, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+    oiOk = not na(oi) and oi > 0
+    w = oiOk ? float(oi) : (oiVolFB and not na(vol) and vol > 0 ? float(vol) : 0.0)
+    [w, oiOk]
+
+float ceWallW = 0.0
+float peWallW = 0.0
+int   ceWallK = na
+int   peWallK = na
+float oiSumCe = 0.0
+float oiSumPe = 0.0
+int   oiFound = 0
+int   volFound = 0
+
+if useOI
+    for off = -8 to 8
+        if math.abs(off) <= oiSide
+            k = atmS + off * oiStepS
+            [wC, okC] = f_wall(f_optSym(k, true))
+            [wP, okP] = f_wall(f_optSym(k, false))
+            if okC or okP
+                oiFound := oiFound + 1
+            if (not okC and wC > 0) or (not okP and wP > 0)
+                volFound := volFound + 1
+            oiSumCe := oiSumCe + wC
+            oiSumPe := oiSumPe + wP
+            if wC > ceWallW
+                ceWallW := wC
+                ceWallK := k
+            if wP > peWallW
+                peWallW := wP
+                peWallK := k
+
+oiPcr = oiSumCe > 0 ? oiSumPe / oiSumCe : na
+oiSrc = oiFound > 0 ? "OI" : volFound > 0 ? "Vol proxy" : "No data"
+oiSupTxt = useOI and not na(peWallK) ? str.tostring(peWallK) : "—"
+oiResTxt = useOI and not na(ceWallK) ? str.tostring(ceWallK) : "—"
+
+var label oiLabS = na
+var label oiLabR = na
+if useOI and showOiLbl and barstate.islast
+    label.delete(oiLabS)
+    label.delete(oiLabR)
+    if not na(peWallK)
+        oiLabS := label.new(bar_index, low, "OI S " + str.tostring(peWallK) + " (max PE " + oiSrc + ")", style = label.style_label_up, color = color.new(#22d3ee, 10), textcolor = color.black, size = size.small)
+    if not na(ceWallK)
+        oiLabR := label.new(bar_index, high, "OI R " + str.tostring(ceWallK) + " (max CE " + oiSrc + ")", style = label.style_label_down, color = color.new(#fb7185, 10), textcolor = color.white, size = size.small)
 
 // ─────────────────────────── STATE ───────────────────────────
 var array<bool>  stIn  = array.new<bool>(9, false)
@@ -458,7 +537,7 @@ if showTbl and barstate.islast
     table.merge_cells(tb, 0, r, 7, r)
 
 // ─────────────────────────── LIVE PANEL ───────────────────────────
-var table pn = table.new(position.middle_left, 2, 6, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 45))
+var table pn = table.new(position.middle_left, 2, 9, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 45))
 if showPnl and barstate.islast
     sz2 = f_sz(tblSize)
     mv  = dIn and not na(dEnt) ? close - dEnt : na
@@ -480,6 +559,13 @@ if showPnl and barstate.islast
     table.cell(pn, 1, 4, dIn ? (dPart ? "T1 ✓  T2 ·" : "T1 ·  T2 ·") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
     table.cell(pn, 0, 5, "Stop", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
     table.cell(pn, 1, 5, dIn ? str.tostring(dStp, "#.##") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
+    oiBg = color.new(#0b1220, 10)
+    table.cell(pn, 0, 6, "OI Support", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 6, useOI ? ("PE " + oiSupTxt) : "off", bgcolor = oiBg, text_color = #67e8f9, text_size = sz2)
+    table.cell(pn, 0, 7, "OI Resist", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 7, useOI ? ("CE " + oiResTxt) : "off", bgcolor = oiBg, text_color = #fda4af, text_size = sz2)
+    table.cell(pn, 0, 8, "OI PCR·src", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 8, useOI ? ((na(oiPcr) ? "—" : str.tostring(oiPcr, "#.##")) + " · " + oiSrc + " · ATM " + str.tostring(atmS)) : "off", bgcolor = oiBg, text_color = color.new(color.white, 20), text_size = sz2)
 
 // ─────────────────────────── ALERTS ───────────────────────────
 alertcondition(justIn,  "Strike Rate — BUY",  "STRIKE RATE buy {{ticker}} at {{close}}")
