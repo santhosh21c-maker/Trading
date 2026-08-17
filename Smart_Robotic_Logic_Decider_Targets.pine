@@ -9,8 +9,8 @@
 //      Targets = C ± {1.00, 1.54, 1.83, 2.08}·B  → T1 labels ARE the anchors H/L
 //   B) What H/L are (testable): on Nifty INDEX 14 Aug 2026, vendor T1 matched
 //      prior Close/Low (24395.85 / 24311.40), NOT prior High/Low (24431.60 / …).
-//      Default INDIAN source is therefore Prev Close + Prev Low (Daily).
-//      Options H/L provenance still open — use Manual Target 1 if auto drifts.
+//      Default INDIAN source: Prev Close + Prev Low (chart scan).
+//      If auto still disagrees with vendor: Manual Target 1 = paste vendor T1.
 //
 // SEGMENTS:
 //   INDIAN - prior-day FROZEN. Extend = line length only.
