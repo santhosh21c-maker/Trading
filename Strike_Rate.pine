@@ -91,14 +91,15 @@ muteSes = input.session("1215-1315", "Midday window", group = G3)
 flatSes = input.session("1510-1520", "Exit all by", group = G3)
 
 G4 = "④  Display"
-showTbl   = input.bool(true, "Dashboard", group = G4)
-showPnl   = input.bool(true, "Live panel", group = G4)
+showPnl   = input.bool(true, "Trade panel (entry desk)", group = G4, tooltip = "Compact panel: status, entry, T1/T2/stop, gates. This is what you need to take a trade.")
+showTbl   = input.bool(false, "Engine stats table", group = G4, tooltip = "OFF by default — verbose per-engine backtest stats. Turn on only when reviewing engines.")
+showOiPanel = input.bool(false, "Show OI on trade panel", group = G4, tooltip = "OI S/R stay on chart labels when enabled in ⑤. Panel line is optional to save space.")
 paint     = input.bool(true, "Paint candles", group = G4)
 showLbl   = input.bool(true, "Signal labels", group = G4)
 showPx    = input.bool(true, "Show entry price on the buy label", group = G4)
 showEarly = input.bool(true, "Early warning dot", group = G4, tooltip = "Dot under the bar when an engine fires BEFORE bar close / confirmed BUY.\nHeads-up only — can vanish. Excluded from dashboard stats.")
 showZone  = input.bool(true, "Draw target / stop zones", group = G4)
-tblPos    = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G4)
+tblPos    = input.string("Top right", "Engine stats position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G4)
 tblSize   = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G4)
 chartSigIn = input.string("Auto (from preset)", "Chart signals from", options = ["Auto (from preset)", "Any engine", "Two must agree", "Anchor", "Ignition", "Drift", "Surge"], group = G4, tooltip = "Auto: Frequency→Any engine · Quality→Two must agree.\nDrives BUY/EXIT labels, candle colour, live panel, alerts.")
 
@@ -646,96 +647,89 @@ plot(dIn ? dEnt + tp1p : na, "Target 1", color = color.new(#00e676, 0), style = 
 plot(dIn ? dEnt + tp2p : na, "Target 2", color = color.new(#00e676, 45), style = plot.style_linebr)
 plot(dIn ? dStp : na, "Stop", color = color.new(#ff5252, 0), style = plot.style_linebr)
 
-// ─────────────────────────── DASHBOARD ───────────────────────────
+// ─────────────────────────── ENGINE STATS (optional · off by default) ───────────────────────────
 f_pos(s) => s == "Top left" ? position.top_left : s == "Bottom right" ? position.bottom_right : s == "Bottom left" ? position.bottom_left : position.top_right
 f_sz(s) => s == "Tiny" ? size.tiny : s == "Normal" ? size.normal : size.small
 
-var table tb = table.new(f_pos(tblPos), 8, 12, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 55))
+var table tb = table.new(f_pos(tblPos), 4, 12, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 55))
 
 if showTbl and barstate.islast
     hb = color.new(#101826, 0)
     tw = color.new(color.white, 0)
     sz = f_sz(tblSize)
-    table.cell(tb, 0, 0, "STRIKE RATE", bgcolor = hb, text_color = tw, text_size = sz, text_halign = text.align_left)
+    table.cell(tb, 0, 0, "ENGINE", bgcolor = hb, text_color = tw, text_size = sz, text_halign = text.align_left)
     table.cell(tb, 1, 0, "Trades", bgcolor = hb, text_color = tw, text_size = sz)
-    table.cell(tb, 2, 0, "T1%",   bgcolor = hb, text_color = tw, text_size = sz)  // booked half
-    table.cell(tb, 3, 0, "T2%",   bgcolor = hb, text_color = tw, text_size = sz)  // MFE ≥ T2
-    table.cell(tb, 4, 0, "Avg",   bgcolor = hb, text_color = tw, text_size = sz)
-    table.cell(tb, 5, 0, "Best",  bgcolor = hb, text_color = tw, text_size = sz)
-    table.cell(tb, 6, 0, "Total", bgcolor = hb, text_color = tw, text_size = sz)
-    table.cell(tb, 7, 0, "Now",   bgcolor = hb, text_color = tw, text_size = sz)
-
+    table.cell(tb, 2, 0, "T1%",   bgcolor = hb, text_color = tw, text_size = sz)
+    table.cell(tb, 3, 0, "Total", bgcolor = hb, text_color = tw, text_size = sz)
     r = 1
     for i = 0 to 8
         if array.get(on, i)
             n   = array.get(nTr, i)
             tot = array.get(sumP, i)
-            av  = n > 0 ? tot / n : 0.0
             hp  = n > 0 ? 100.0 * array.get(nHit, i) / n : 0.0
-            h2  = n > 0 ? 100.0 * array.get(nHit2, i) / n : 0.0
-            bm  = n > 0 ? array.get(sumM, i) / n : 0.0
-            liv = array.get(stIn, i)
-            bg  = i == 8 ? color.new(#1e3a5f, 15) : color.new(#0b1220, 25)
-            tc  = i == 8 ? color.new(#93c5fd, 0) : color.new(color.white, 10)
+            bg  = i == dIdx ? color.new(#1e3a5f, 15) : color.new(#0b1220, 25)
+            tc  = i == dIdx ? color.new(#93c5fd, 0) : color.new(color.white, 10)
             hc  = hp >= 55 ? #00e676 : hp >= 45 ? #fbbf24 : #ff8a80
             vc  = tot > 0 ? #00e676 : tot < 0 ? #ff5252 : color.gray
             table.cell(tb, 0, r, array.get(names, i), bgcolor = bg, text_color = tc, text_size = sz, text_halign = text.align_left)
             table.cell(tb, 1, r, str.tostring(n), bgcolor = bg, text_color = tc, text_size = sz)
             table.cell(tb, 2, r, n > 0 ? str.tostring(hp, "#") + "%" : "—", bgcolor = bg, text_color = hc, text_size = sz)
-            table.cell(tb, 3, r, n > 0 ? str.tostring(h2, "#") + "%" : "—", bgcolor = bg, text_color = tc, text_size = sz)
-            table.cell(tb, 4, r, str.tostring(av, "#.#"), bgcolor = bg, text_color = tc, text_size = sz)
-            table.cell(tb, 5, r, str.tostring(bm, "#.#"), bgcolor = bg, text_color = tc, text_size = sz)
-            table.cell(tb, 6, r, str.tostring(tot, "#.#"), bgcolor = bg, text_color = vc, text_size = sz)
-            table.cell(tb, 7, r, liv ? "● LONG" : "—", bgcolor = bg, text_color = liv ? #00e676 : color.gray, text_size = sz)
+            table.cell(tb, 3, r, str.tostring(tot, "#.#"), bgcolor = bg, text_color = vc, text_size = sz)
             r := r + 1
+else if barstate.islast
+    table.clear(tb, 0, 0, 3, 11)
 
-    fb = color.new(#0b1220, 0)
-    ftxt = (isCE ? "CALL" : "PUT") + "   ·   " + preset + "   ·   " + mode + "/" + chartSig + "   ·   T1 " + str.tostring(tp1p, "#") + " / T2 " + str.tostring(tp2p, "#") + " / Stop " + str.tostring(slp, "#") + "   ·   max " + str.tostring(maxDay) + "/day   ·   holdT1 " + (holdToT1 ? "ON" : "OFF")
-    table.cell(tb, 0, r, ftxt, bgcolor = fb, text_color = color.new(color.white, 35), text_size = sz, text_halign = text.align_left)
-    for c = 1 to 7
-        table.cell(tb, c, r, "", bgcolor = fb, text_size = sz)
-    table.merge_cells(tb, 0, r, 7, r)
-
-// ─────────────────────────── LIVE PANEL ───────────────────────────
-var table pn = table.new(position.middle_left, 2, 12, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 45))
+// ─────────────────────────── TRADE PANEL (entry desk) ───────────────────────────
+var table pn = table.new(position.middle_left, 2, 8, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 45))
 if showPnl and barstate.islast
     sz2 = f_sz(tblSize)
+    // Prospective levels when flat — what you need before clicking BUY
+    ePx = dIn and not na(dEnt) ? dEnt : close
+    t1Px = ePx + tp1p
+    t2Px = ePx + tp2p
+    slPx = dIn and not na(dStp) ? dStp : ePx - slp
     mv  = dIn and not na(dEnt) ? close - dEnt : na
-    mp  = dIn and not na(dEnt) and dEnt > 0 ? (close - dEnt) / dEnt * 100 : na
-    good = not na(mv) and mv >= 0
-    vb = not dIn ? color.new(#374151, 25) : good ? color.new(#065f46, 12) : color.new(#7f1d1d, 12)
-    vt = not dIn ? color.new(color.white, 35) : good ? #6ee7b7 : #fca5a5
+    gateOK = allow and coolOK and not flatNow
+    blockWhy = not dteOK ? "DTE" : not ivOK ? "IV" : not coolOK ? "COOL" : not syncOK ? "SYNC" : not premOK ? "PREM" : not adxOK ? "ADX" : flatNow ? "EOD" : not timeOK ? "SESSION" : ""
+    statusTxt = dIn ? (dPart ? "IN · T1 done" : "IN TRADE") : gateOK ? "READY" : ("BLOCK · " + blockWhy)
+    good = dIn ? (not na(mv) and mv >= 0) : gateOK
+    vb = dIn ? (good ? color.new(#065f46, 12) : color.new(#7f1d1d, 12)) : gateOK ? color.new(#065f46, 18) : color.new(#374151, 20)
+    vt = dIn ? (good ? #6ee7b7 : #fca5a5) : gateOK ? #6ee7b7 : #fcd34d
     lb = color.new(#101826, 0)
     lt = color.new(color.white, 30)
+    sideTxt = isCE ? "CALL" : "PUT"
+
     table.cell(pn, 0, 0, "STRIKE RATE", bgcolor = lb, text_color = color.white, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 0, side == "Auto" ? (isCE ? "CALL" : "PUT") : side, bgcolor = lb, text_color = color.new(color.white, 25), text_size = sz2)
+    table.cell(pn, 1, 0, sideTxt, bgcolor = lb, text_color = color.new(color.white, 20), text_size = sz2)
+
     table.cell(pn, 0, 1, "Status", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 1, dIn ? "IN TRADE" : "FLAT", bgcolor = vb, text_color = vt, text_size = sz2)
+    table.cell(pn, 1, 1, statusTxt, bgcolor = vb, text_color = vt, text_size = sz2)
+
     table.cell(pn, 0, 2, "Entry", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 2, dIn ? str.tostring(dEnt, "#.##") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
-    table.cell(pn, 0, 3, "Move", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 3, na(mv) ? "—" : (mv >= 0 ? "+" : "") + str.tostring(mv, "#.##") + "  (" + str.tostring(mp, "#.#") + "%)", bgcolor = vb, text_color = vt, text_size = sz2)
-    table.cell(pn, 0, 4, "Targets", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 4, dIn ? (dPart ? "T1 ✓  T2 ·" : "T1 ·  T2 ·") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
-    table.cell(pn, 0, 5, "Stop", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 5, dIn ? str.tostring(dStp, "#.##") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
-    buyBg = color.new(#0b1220, 10)
-    dteCol = not useDte ? color.gray : dteOK ? #6ee7b7 : #fca5a5
-    ivCol  = not useIv ? color.gray : ivOK ? #6ee7b7 : #fca5a5
-    coolCol = not useCool ? color.gray : coolOK ? #6ee7b7 : #fbbf24
-    table.cell(pn, 0, 6, "DTE", bgcolor = buyBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 6, dteTxt + "d · exp " + expUsed + (dteOK ? "" : "  BLOCK"), bgcolor = buyBg, text_color = dteCol, text_size = sz2)
-    table.cell(pn, 0, 7, "IV rank", bgcolor = buyBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 7, ivTxt + " · VIX " + vixTxt + (ivOK ? "" : "  BLOCK"), bgcolor = buyBg, text_color = ivCol, text_size = sz2)
-    table.cell(pn, 0, 8, "Cooldown", bgcolor = buyBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 8, coolTxt, bgcolor = buyBg, text_color = coolCol, text_size = sz2)
-    oiBg = color.new(#0b1220, 10)
-    table.cell(pn, 0, 9, "OI Support", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 9, useOI ? ("PE " + oiSupTxt + (useOnline and onlineOiSupLots > 0 ? " · " + str.tostring(onlineOiSupLots) : "")) : "off", bgcolor = oiBg, text_color = #67e8f9, text_size = sz2)
-    table.cell(pn, 0, 10, "OI Resist", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 10, useOI ? ("CE " + oiResTxt + (useOnline and onlineOiResLots > 0 ? " · " + str.tostring(onlineOiResLots) : "")) : "off", bgcolor = oiBg, text_color = #fda4af, text_size = sz2)
-    table.cell(pn, 0, 11, "OI src", bgcolor = oiBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
-    table.cell(pn, 1, 11, useOI ? (oiSrc + (useOnline ? " · " + onlineOiLabel : " · ATM " + str.tostring(atmS))) : "off", bgcolor = oiBg, text_color = color.new(color.white, 20), text_size = sz2)
+    table.cell(pn, 1, 2, str.tostring(ePx, "#.##") + (dIn ? "" : "  watch"), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    table.cell(pn, 0, 3, "T1 / T2", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 3, str.tostring(t1Px, "#.##") + " / " + str.tostring(t2Px, "#.##") + (dIn and dPart ? "  T1✓" : ""), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    table.cell(pn, 0, 4, "Stop", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 4, str.tostring(slPx, "#.##"), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    table.cell(pn, 0, 5, "Move", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 5, na(mv) ? "—" : ((mv >= 0 ? "+" : "") + str.tostring(mv, "#.##")), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    gateBg = color.new(#0b1220, 10)
+    gateLine = "DTE " + dteTxt + " · IV " + ivTxt + " · " + (coolOK ? "Cool OK" : coolTxt)
+    table.cell(pn, 0, 6, "Gates", bgcolor = gateBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 6, gateLine, bgcolor = gateBg, text_color = gateOK ? #6ee7b7 : #fcd34d, text_size = sz2)
+
+    if showOiPanel and useOI
+        table.cell(pn, 0, 7, "OI", bgcolor = gateBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+        table.cell(pn, 1, 7, "S " + oiSupTxt + " · R " + oiResTxt, bgcolor = gateBg, text_color = color.new(color.white, 25), text_size = sz2)
+    else
+        table.cell(pn, 0, 7, "Plan", bgcolor = gateBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+        table.cell(pn, 1, 7, "T1 " + str.tostring(tp1p, "#") + " / T2 " + str.tostring(tp2p, "#") + " / SL " + str.tostring(slp, "#"), bgcolor = gateBg, text_color = color.new(color.white, 25), text_size = sz2)
+else if barstate.islast
+    table.clear(pn, 0, 0, 1, 7)
 
 // ─────────────────────────── ALERTS ───────────────────────────
 alertcondition(justIn,  "Strike Rate — BUY",  "STRIKE RATE buy {{ticker}} at {{close}}")
