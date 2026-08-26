@@ -29,6 +29,10 @@ Live panel shows **DTE / IV rank / Cooldown** (green = ok, red/amber = blocking)
 4. Leave **Preset = Frequency (≥2/day)** for ~2 entries/day
 5. Use **Quality** if you want fewer, stricter signals
 
+**Trade panel** (default): Status · Entry · T1/T2 · Stop · Move · Gates.  
+**Engine stats table** is OFF by default — turn on only to review engines.  
+OI stays on chart labels; optional one-line on the panel.
+
 ## OI walls
 
 Context only (not entries). Refresh with `fetch_oi_walls.py` for baked NSE S/R.
