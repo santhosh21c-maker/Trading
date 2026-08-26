@@ -1,0 +1,81 @@
+label,trades,session_days,active_days,avg_per_session_day,avg_per_active_day,pct_session_days_ge2,pct_session_days_ge1,median_active,net,t1_pct,cfg,side,strike,off
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|CE|24200,12,59,10,0.203,1.2,3.4,16.9,1.0,3.9,66.7,Sniper·TwoAgree·ADX·max2 (v1.1 default),CE,24200,-100
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|CE|24250,12,59,10,0.203,1.2,3.4,16.9,1.0,4.6,66.7,Sniper·TwoAgree·ADX·max2 (v1.1 default),CE,24250,-50
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|CE|24300,14,59,12,0.237,1.167,3.4,20.3,1.0,-37.8,57.1,Sniper·TwoAgree·ADX·max2 (v1.1 default),CE,24300,0
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|CE|24350,12,59,10,0.203,1.2,3.4,16.9,1.0,-26.8,58.3,Sniper·TwoAgree·ADX·max2 (v1.1 default),CE,24350,50
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|CE|24400,10,59,8,0.169,1.25,3.4,13.6,1.0,-10.4,60.0,Sniper·TwoAgree·ADX·max2 (v1.1 default),CE,24400,100
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|PE|24200,12,59,11,0.203,1.091,1.7,18.6,1.0,95.7,91.7,Sniper·TwoAgree·ADX·max2 (v1.1 default),PE,24200,-100
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|PE|24250,12,59,11,0.203,1.091,1.7,18.6,1.0,77.9,83.3,Sniper·TwoAgree·ADX·max2 (v1.1 default),PE,24250,-50
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|PE|24300,14,59,13,0.237,1.077,1.7,22.0,1.0,92.6,85.7,Sniper·TwoAgree·ADX·max2 (v1.1 default),PE,24300,0
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|PE|24350,13,59,12,0.22,1.083,1.7,20.3,1.0,91.9,84.6,Sniper·TwoAgree·ADX·max2 (v1.1 default),PE,24350,50
+Sniper·TwoAgree·ADX·max2 (v1.1 default)|PE|24400,13,59,12,0.22,1.083,1.7,20.3,1.0,94.0,84.6,Sniper·TwoAgree·ADX·max2 (v1.1 default),PE,24400,100
+Sniper·TwoAgree·noADX·max3|CE|24200,18,59,14,0.305,1.286,5.1,23.7,1.0,-10.2,61.1,Sniper·TwoAgree·noADX·max3,CE,24200,-100
+Sniper·TwoAgree·noADX·max3|CE|24250,19,59,15,0.322,1.267,5.1,25.4,1.0,-6.1,63.2,Sniper·TwoAgree·noADX·max3,CE,24250,-50
+Sniper·TwoAgree·noADX·max3|CE|24300,21,59,16,0.356,1.312,6.8,27.1,1.0,-50.3,57.1,Sniper·TwoAgree·noADX·max3,CE,24300,0
+Sniper·TwoAgree·noADX·max3|CE|24350,18,59,14,0.305,1.286,5.1,23.7,1.0,-43.4,55.6,Sniper·TwoAgree·noADX·max3,CE,24350,50
+Sniper·TwoAgree·noADX·max3|CE|24400,16,59,12,0.271,1.333,5.1,20.3,1.0,-1.6,62.5,Sniper·TwoAgree·noADX·max3,CE,24400,100
+Sniper·TwoAgree·noADX·max3|PE|24200,16,59,14,0.271,1.143,3.4,23.7,1.0,55.9,75.0,Sniper·TwoAgree·noADX·max3,PE,24200,-100
+Sniper·TwoAgree·noADX·max3|PE|24250,16,59,14,0.271,1.143,3.4,23.7,1.0,30.5,68.8,Sniper·TwoAgree·noADX·max3,PE,24250,-50
+Sniper·TwoAgree·noADX·max3|PE|24300,18,59,16,0.305,1.125,3.4,27.1,1.0,45.4,72.2,Sniper·TwoAgree·noADX·max3,PE,24300,0
+Sniper·TwoAgree·noADX·max3|PE|24350,17,59,15,0.288,1.133,3.4,25.4,1.0,44.8,70.6,Sniper·TwoAgree·noADX·max3,PE,24350,50
+Sniper·TwoAgree·noADX·max3|PE|24400,17,59,15,0.288,1.133,3.4,25.4,1.0,47.2,70.6,Sniper·TwoAgree·noADX·max3,PE,24400,100
+Sniper·Any·ADX·max3|CE|24200,67,59,43,1.136,1.558,28.8,72.9,1.0,85.6,68.7,Sniper·Any·ADX·max3,CE,24200,-100
+Sniper·Any·ADX·max3|CE|24250,63,59,43,1.068,1.465,23.7,72.9,1.0,118.0,71.4,Sniper·Any·ADX·max3,CE,24250,-50
+Sniper·Any·ADX·max3|CE|24300,64,59,45,1.085,1.422,23.7,76.3,1.0,130.6,71.9,Sniper·Any·ADX·max3,CE,24300,0
+Sniper·Any·ADX·max3|CE|24350,56,59,40,0.949,1.4,22.0,67.8,1.0,107.7,71.4,Sniper·Any·ADX·max3,CE,24350,50
+Sniper·Any·ADX·max3|CE|24400,48,59,35,0.814,1.371,16.9,59.3,1.0,124.8,72.9,Sniper·Any·ADX·max3,CE,24400,100
+Sniper·Any·ADX·max3|PE|24200,60,59,35,1.017,1.714,30.5,59.3,2.0,103.6,70.0,Sniper·Any·ADX·max3,PE,24200,-100
+Sniper·Any·ADX·max3|PE|24250,65,59,35,1.102,1.857,35.6,59.3,2.0,236.8,78.5,Sniper·Any·ADX·max3,PE,24250,-50
+Sniper·Any·ADX·max3|PE|24300,67,59,35,1.136,1.914,37.3,59.3,2.0,283.1,80.6,Sniper·Any·ADX·max3,PE,24300,0
+Sniper·Any·ADX·max3|PE|24350,67,59,35,1.136,1.914,37.3,59.3,2.0,199.3,76.1,Sniper·Any·ADX·max3,PE,24350,50
+Sniper·Any·ADX·max3|PE|24400,67,59,35,1.136,1.914,37.3,59.3,2.0,194.1,76.1,Sniper·Any·ADX·max3,PE,24400,100
+Sniper·Any·noADX·max3|CE|24200,88,59,49,1.492,1.796,40.7,83.1,1.0,123.8,68.2,Sniper·Any·noADX·max3,CE,24200,-100
+Sniper·Any·noADX·max3|CE|24250,86,59,49,1.458,1.755,39.0,83.1,1.0,144.8,69.8,Sniper·Any·noADX·max3,CE,24250,-50
+Sniper·Any·noADX·max3|CE|24300,88,59,50,1.492,1.76,40.7,84.7,1.0,95.1,68.2,Sniper·Any·noADX·max3,CE,24300,0
+Sniper·Any·noADX·max3|CE|24350,78,59,48,1.322,1.625,33.9,81.4,1.0,84.7,66.7,Sniper·Any·noADX·max3,CE,24350,50
+Sniper·Any·noADX·max3|CE|24400,66,59,43,1.119,1.535,28.8,72.9,1.0,125.4,69.7,Sniper·Any·noADX·max3,CE,24400,100
+Sniper·Any·noADX·max3|PE|24200,75,59,42,1.271,1.786,42.4,71.2,2.0,106.7,68.0,Sniper·Any·noADX·max3,PE,24200,-100
+Sniper·Any·noADX·max3|PE|24250,82,59,43,1.39,1.907,47.5,72.9,2.0,216.8,73.2,Sniper·Any·noADX·max3,PE,24250,-50
+Sniper·Any·noADX·max3|PE|24300,88,59,43,1.492,2.047,54.2,72.9,2.0,224.6,73.9,Sniper·Any·noADX·max3,PE,24300,0
+Sniper·Any·noADX·max3|PE|24350,86,59,43,1.458,2.0,52.5,72.9,2.0,109.7,69.8,Sniper·Any·noADX·max3,PE,24350,50
+Sniper·Any·noADX·max3|PE|24400,86,59,43,1.458,2.0,50.8,72.9,2.0,48.5,66.3,Sniper·Any·noADX·max3,PE,24400,100
+Scanner·TwoAgree·ADX·max3|CE|24200,30,59,24,0.508,1.25,8.5,40.7,1.0,91.3,76.7,Scanner·TwoAgree·ADX·max3,CE,24200,-100
+Scanner·TwoAgree·ADX·max3|CE|24250,29,59,24,0.492,1.208,6.8,40.7,1.0,96.7,75.9,Scanner·TwoAgree·ADX·max3,CE,24250,-50
+Scanner·TwoAgree·ADX·max3|CE|24300,31,59,26,0.525,1.192,6.8,44.1,1.0,48.8,71.0,Scanner·TwoAgree·ADX·max3,CE,24300,0
+Scanner·TwoAgree·ADX·max3|CE|24350,28,59,23,0.475,1.217,6.8,39.0,1.0,-6.3,64.3,Scanner·TwoAgree·ADX·max3,CE,24350,50
+Scanner·TwoAgree·ADX·max3|CE|24400,25,59,21,0.424,1.19,6.8,35.6,1.0,25.3,68.0,Scanner·TwoAgree·ADX·max3,CE,24400,100
+Scanner·TwoAgree·ADX·max3|PE|24200,32,59,25,0.542,1.28,8.5,42.4,1.0,68.1,68.8,Scanner·TwoAgree·ADX·max3,PE,24200,-100
+Scanner·TwoAgree·ADX·max3|PE|24250,35,59,27,0.593,1.296,10.2,45.8,1.0,103.3,71.4,Scanner·TwoAgree·ADX·max3,PE,24250,-50
+Scanner·TwoAgree·ADX·max3|PE|24300,36,59,28,0.61,1.286,10.2,47.5,1.0,145.7,77.8,Scanner·TwoAgree·ADX·max3,PE,24300,0
+Scanner·TwoAgree·ADX·max3|PE|24350,37,59,28,0.627,1.321,11.9,47.5,1.0,141.1,75.7,Scanner·TwoAgree·ADX·max3,PE,24350,50
+Scanner·TwoAgree·ADX·max3|PE|24400,38,59,28,0.644,1.357,13.6,47.5,1.0,108.7,73.7,Scanner·TwoAgree·ADX·max3,PE,24400,100
+Scanner·Any·noADX·max3  ★ target≥2/day|CE|24200,124,59,53,2.102,2.34,72.9,89.8,3.0,219.3,71.0,Scanner·Any·noADX·max3  ★ target≥2/day,CE,24200,-100
+Scanner·Any·noADX·max3  ★ target≥2/day|CE|24250,122,59,53,2.068,2.302,72.9,89.8,2.0,184.5,69.7,Scanner·Any·noADX·max3  ★ target≥2/day,CE,24250,-50
+Scanner·Any·noADX·max3  ★ target≥2/day|CE|24300,124,59,54,2.102,2.296,72.9,91.5,2.5,219.3,70.2,Scanner·Any·noADX·max3  ★ target≥2/day,CE,24300,0
+Scanner·Any·noADX·max3  ★ target≥2/day|CE|24350,112,59,53,1.898,2.113,64.4,89.8,2.0,167.8,70.5,Scanner·Any·noADX·max3  ★ target≥2/day,CE,24350,50
+Scanner·Any·noADX·max3  ★ target≥2/day|CE|24400,95,59,49,1.61,1.939,50.8,83.1,2.0,200.6,70.5,Scanner·Any·noADX·max3  ★ target≥2/day,CE,24400,100
+Scanner·Any·noADX·max3  ★ target≥2/day|PE|24200,93,59,48,1.576,1.938,50.8,81.4,2.0,24.3,65.6,Scanner·Any·noADX·max3  ★ target≥2/day,PE,24200,-100
+Scanner·Any·noADX·max3  ★ target≥2/day|PE|24250,107,59,49,1.814,2.184,62.7,83.1,2.0,102.8,66.4,Scanner·Any·noADX·max3  ★ target≥2/day,PE,24250,-50
+Scanner·Any·noADX·max3  ★ target≥2/day|PE|24300,114,59,50,1.932,2.28,66.1,84.7,2.5,164.2,69.3,Scanner·Any·noADX·max3  ★ target≥2/day,PE,24300,0
+Scanner·Any·noADX·max3  ★ target≥2/day|PE|24350,115,59,50,1.949,2.3,64.4,84.7,3.0,75.0,67.0,Scanner·Any·noADX·max3  ★ target≥2/day,PE,24350,50
+Scanner·Any·noADX·max3  ★ target≥2/day|PE|24400,115,59,49,1.949,2.347,64.4,83.1,3.0,38.2,65.2,Scanner·Any·noADX·max3  ★ target≥2/day,PE,24400,100
+Scanner·Any·noADX·max4|CE|24200,139,59,53,2.356,2.623,72.9,89.8,3.0,171.8,69.1,Scanner·Any·noADX·max4,CE,24200,-100
+Scanner·Any·noADX·max4|CE|24250,135,59,53,2.288,2.547,72.9,89.8,2.0,145.7,68.1,Scanner·Any·noADX·max4,CE,24250,-50
+Scanner·Any·noADX·max4|CE|24300,136,59,54,2.305,2.519,72.9,91.5,2.5,167.3,68.4,Scanner·Any·noADX·max4,CE,24300,0
+Scanner·Any·noADX·max4|CE|24350,122,59,53,2.068,2.302,64.4,89.8,2.0,145.3,69.7,Scanner·Any·noADX·max4,CE,24350,50
+Scanner·Any·noADX·max4|CE|24400,101,59,49,1.712,2.061,50.8,83.1,2.0,233.3,71.3,Scanner·Any·noADX·max4,CE,24400,100
+Scanner·Any·noADX·max4|PE|24200,99,59,48,1.678,2.062,50.8,81.4,2.0,58.2,66.7,Scanner·Any·noADX·max4,PE,24200,-100
+Scanner·Any·noADX·max4|PE|24250,115,59,49,1.949,2.347,62.7,83.1,2.0,95.4,66.1,Scanner·Any·noADX·max4,PE,24250,-50
+Scanner·Any·noADX·max4|PE|24300,128,59,50,2.169,2.56,66.1,84.7,2.5,169.7,68.8,Scanner·Any·noADX·max4,PE,24300,0
+Scanner·Any·noADX·max4|PE|24350,128,59,50,2.169,2.56,64.4,84.7,3.0,81.5,66.4,Scanner·Any·noADX·max4,PE,24350,50
+Scanner·Any·noADX·max4|PE|24400,129,59,49,2.186,2.633,64.4,83.1,3.0,20.0,64.3,Scanner·Any·noADX·max4,PE,24400,100
+Scanner·Any·noMute·max4|CE|24200,153,59,54,2.593,2.833,76.3,91.5,3.0,119.1,67.3,Scanner·Any·noMute·max4,CE,24200,-100
+Scanner·Any·noMute·max4|CE|24250,146,59,54,2.475,2.704,76.3,91.5,3.0,127.3,67.1,Scanner·Any·noMute·max4,CE,24250,-50
+Scanner·Any·noMute·max4|CE|24300,145,59,54,2.458,2.685,74.6,91.5,3.0,143.5,67.6,Scanner·Any·noMute·max4,CE,24300,0
+Scanner·Any·noMute·max4|CE|24350,134,59,54,2.271,2.481,69.5,91.5,2.0,155.6,69.4,Scanner·Any·noMute·max4,CE,24350,50
+Scanner·Any·noMute·max4|CE|24400,110,59,49,1.864,2.245,55.9,83.1,2.0,261.6,72.7,Scanner·Any·noMute·max4,CE,24400,100
+Scanner·Any·noMute·max4|PE|24200,112,59,49,1.898,2.286,54.2,83.1,2.0,138.3,68.8,Scanner·Any·noMute·max4,PE,24200,-100
+Scanner·Any·noMute·max4|PE|24250,133,59,50,2.254,2.66,66.1,84.7,3.0,177.6,69.2,Scanner·Any·noMute·max4,PE,24250,-50
+Scanner·Any·noMute·max4|PE|24300,147,59,52,2.492,2.827,71.2,88.1,3.0,179.8,68.7,Scanner·Any·noMute·max4,PE,24300,0
+Scanner·Any·noMute·max4|PE|24350,147,59,52,2.492,2.827,69.5,88.1,3.0,114.5,67.3,Scanner·Any·noMute·max4,PE,24350,50
+Scanner·Any·noMute·max4|PE|24400,147,59,51,2.492,2.882,71.2,86.4,3.0,10.6,66.0,Scanner·Any·noMute·max4,PE,24400,100

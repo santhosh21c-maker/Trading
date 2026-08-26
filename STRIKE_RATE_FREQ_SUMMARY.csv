@@ -1,0 +1,9 @@
+cfg,mode,cons_n,adx,max_day,mute,avg_entries_per_session_day_per_chart,avg_on_active_days,pct_session_days_with_ge2,ATM_CE_per_session_day,ATM_CE_per_active_day,ATM_CE_pct_days_ge2,ATM_PE_per_session_day,ATM_PE_per_active_day,ATM_PE_pct_days_ge2,ATM_CE_t1_pct,ATM_PE_t1_pct,ATM_CE_net,ATM_PE_net
+Sniper·TwoAgree·ADX·max2 (v1.1 default),Sniper,2,True,2,True,0.21,1.144,2.5,0.237,1.167,3.4,0.237,1.077,1.7,57.1,85.7,-37.8,92.6
+Sniper·TwoAgree·noADX·max3,Sniper,2,False,3,True,0.298,1.216,4.4,0.356,1.312,6.8,0.305,1.125,3.4,57.1,72.2,-50.3,45.4
+Sniper·Any·ADX·max3,Sniper,1,True,3,True,1.058,1.653,29.3,1.085,1.422,23.7,1.136,1.914,37.3,71.9,80.6,130.6,283.1
+Sniper·Any·noADX·max3,Sniper,1,False,3,True,1.395,1.821,43.1,1.492,1.76,40.7,1.492,2.047,54.2,68.2,73.9,95.1,224.6
+Scanner·TwoAgree·ADX·max3,Scanner,2,True,3,True,0.544,1.26,9.0,0.525,1.192,6.8,0.61,1.286,10.2,71.0,77.8,48.8,145.7
+Scanner·Any·noADX·max3  ★ target≥2/day,Scanner,1,False,3,True,1.9,2.204,64.2,2.102,2.296,72.9,1.932,2.28,66.1,70.2,69.3,219.3,164.2
+Scanner·Any·noADX·max4,Scanner,1,False,4,True,2.088,2.421,64.2,2.305,2.519,72.9,2.169,2.56,66.1,68.4,68.8,167.3,169.7
+Scanner·Any·noMute·max4,Scanner,1,False,4,False,2.329,2.643,68.5,2.458,2.685,74.6,2.492,2.827,71.2,67.6,68.7,143.5,179.8
