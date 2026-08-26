@@ -60,7 +60,7 @@
 //  walls plot as lines; on option charts they show in the panel / labels.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("STRIKE RATE", "STRIKE RATE", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, dynamic_requests = true)
+indicator("STRIKE RATE", "STRIKERATE", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, dynamic_requests = true)
 
 // ─────────────────────────── SETTINGS ───────────────────────────
 G1 = "①  Setup"
@@ -110,7 +110,7 @@ oiRoot    = input.string("AUTO", "Option root", options = ["AUTO", "NIFTY", "BAN
 oiStep    = input.int(0, "Strike step (0 = auto)", minval = 0, step = 50, group = G5)
 oiSide    = input.int(5, "TV ladder: strikes each side", minval = 2, maxval = 8, group = G5)
 oiFmt     = input.string("YYMMDD + C/P + strike", "TV symbol format", options = ["YYMMDD + C/P + strike", "YYMMDD + strike + CE/PE"], group = G5)
-oiVolFB   = input.bool(true, "TV ladder: volume if OI blank", group = G5)
+oiVolFB   = input.bool(true, "TV ladder: use volume walls", group = G5, tooltip = "Pine v6 has no openinterest built-in for option symbols. TV ladder mode ranks strikes by daily volume as a wall proxy. Prefer Online NSE (baked) for real OI.")
 showOiLbl = input.bool(true, "Label OI walls on chart", group = G5)
 plotOiLines = input.bool(true, "Plot lines when price looks like index", group = G5, tooltip = "If chart close > 1000 (index/futures scale), draw S/R lines at OI strikes.\nOn option premium charts, lines stay off — strikes show in the panel.")
 
@@ -227,15 +227,27 @@ tTh = (dH - dL) > 0 and (dC - dL) > 0.66 * (dH - dL)
 bTh = (dH - dL) > 0 and (dH - dC) > 0.66 * (dH - dL)
 
 // ── signal definitions ──
-a1B = ta.crossover(dC, pTC) or ta.crossover(dC, pR1) or (dL <= pS1 and dC > pS1 and dC > dO)
-a1S = ta.crossunder(dC, pBC) or ta.crossunder(dC, pS1) or (dH >= pR1 and dC < pR1 and dC < dO)
-x1B = ta.crossunder(dC, pBC) or ta.crossunder(dC, pP)
-x1S = ta.crossover(dC, pTC) or ta.crossover(dC, pP)
+// Hoist all ta.crossover / ta.crossunder to globals (CW10002 — must run every bar).
+xoPTC  = ta.crossover(dC, pTC)
+xoPR1  = ta.crossover(dC, pR1)
+xoPP   = ta.crossover(dC, pP)
+xuPBC  = ta.crossunder(dC, pBC)
+xuPS1  = ta.crossunder(dC, pS1)
+xuPP   = ta.crossunder(dC, pP)
+xoVwap = ta.crossover(dC, vwap)
+xuVwap = ta.crossunder(dC, vwap)
+xoLPH  = ta.crossover(dC, lPH)
+xuLPL  = ta.crossunder(dC, lPL)
 
-a2B = ta.crossover(dC, vwap) and dC > dO and (dC - vwap) >= 0.30 * dAtr
-a2S = ta.crossunder(dC, vwap) and dC < dO and (vwap - dC) >= 0.30 * dAtr
-x2B = ta.crossunder(dC, vwap)
-x2S = ta.crossover(dC, vwap)
+a1B = xoPTC or xoPR1 or (dL <= pS1 and dC > pS1 and dC > dO)
+a1S = xuPBC or xuPS1 or (dH >= pR1 and dC < pR1 and dC < dO)
+x1B = xuPBC or xuPP
+x1S = xoPTC or xoPP
+
+a2B = xoVwap and dC > dO and (dC - vwap) >= 0.30 * dAtr
+a2S = xuVwap and dC < dO and (vwap - dC) >= 0.30 * dAtr
+x2B = xuVwap
+x2S = xoVwap
 
 a3B = orUp[1] and dL <= orH and dC > orH and dC > dO
 a3S = orDn[1] and dH >= orL and dC < orL and dC < dO
@@ -250,16 +262,16 @@ x4S = dirF == 1
 
 a5B = not na(sXU) and sXU <= 3 and e21 > e50 and slUp
 a5S = not na(sXD) and sXD <= 3 and e21 < e50 and slDn
-x5B = ta.crossunder(e9, e21)
-x5S = ta.crossover(e9, e21)
+x5B = xDn
+x5S = xUp
 
 a6B = not na(sF) and sF <= 3 and mom > 0 and mom > mom[1]
 a6S = not na(sF) and sF <= 3 and mom < 0 and mom < mom[1]
 x6B = mom < 0 or (mom < mom[1] and mom[1] < mom[2])
 x6S = mom > 0 or (mom > mom[1] and mom[1] > mom[2])
 
-a7B = not na(lPH) and ta.crossover(dC, lPH)
-a7S = not na(lPL) and ta.crossunder(dC, lPL)
+a7B = not na(lPH) and xoLPH
+a7S = not na(lPL) and xuLPL
 if a7B
     bUp := lPH
 if a7S
@@ -269,8 +281,8 @@ x7S = not na(bDn) and dC > bDn
 
 a8B = dV > 2.0 * vS and wid and tTh and dC > dO
 a8S = dV > 2.0 * vS and wid and bTh and dC < dO
-x8B = ta.crossunder(e9, e21) or (dV > 2.0 * vS and bTh and dC < dO)
-x8S = ta.crossover(e9, e21) or (dV > 2.0 * vS and tTh and dC > dO)
+x8B = xDn or (dV > 2.0 * vS and bTh and dC < dO)
+x8S = xUp or (dV > 2.0 * vS and tTh and dC > dO)
 
 f_pick(b, s) => isCE ? b : s
 optAtr = ta.atr(14)
@@ -316,11 +328,13 @@ expS    = str.tostring(oiExpiry)
 f_optSym(int k, bool isCall) =>
     oiFmt == "YYMMDD + C/P + strike" ? ("NSE:" + oiRootS + expS + (isCall ? "C" : "P") + str.tostring(k)) : ("NSE:" + oiRootS + expS + str.tostring(k) + (isCall ? "CE" : "PE"))
 
+// Pine v6: no `openinterest` built-in on option feeds — TV ladder uses daily volume as wall proxy.
+// Real NSE OI comes from the baked Online NSE block (fetch_oi_walls.py).
 f_wall(string sym) =>
-    [oi, vol] = request.security(sym, "D", [openinterest, volume], ignore_invalid_symbol = true, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-    oiOk = not na(oi) and oi > 0
-    w = oiOk ? float(oi) : (oiVolFB and not na(vol) and vol > 0 ? float(vol) : 0.0)
-    [w, oiOk]
+    vol = request.security(sym, "D", volume, ignore_invalid_symbol = true, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+    volOk = oiVolFB and not na(vol) and vol > 0
+    w = volOk ? float(vol) : 0.0
+    [w, volOk]
 
 float ceWallW = 0.0
 float peWallW = 0.0
@@ -328,7 +342,6 @@ int   ceWallK = na
 int   peWallK = na
 float oiSumCe = 0.0
 float oiSumPe = 0.0
-int   oiFound = 0
 int   volFound = 0
 
 useOnline = useOI and oiSource == "Online NSE (baked)"
@@ -341,8 +354,6 @@ if useTvLadder
             [wC, okC] = f_wall(f_optSym(k, true))
             [wP, okP] = f_wall(f_optSym(k, false))
             if okC or okP
-                oiFound := oiFound + 1
-            if (not okC and wC > 0) or (not okP and wP > 0)
                 volFound := volFound + 1
             oiSumCe := oiSumCe + wC
             oiSumPe := oiSumPe + wP
@@ -357,7 +368,7 @@ if useTvLadder
 float oiSup = useOnline and onlineOiSup > 0 ? onlineOiSup : useTvLadder and not na(peWallK) ? float(peWallK) : na
 float oiRes = useOnline and onlineOiRes > 0 ? onlineOiRes : useTvLadder and not na(ceWallK) ? float(ceWallK) : na
 oiPcr = useTvLadder and oiSumCe > 0 ? oiSumPe / oiSumCe : na
-oiSrc = useOnline and onlineOiSup > 0 ? "NSE online" : useOnline ? "Fetch needed" : oiFound > 0 ? "TV OI" : volFound > 0 ? "TV vol" : "No data"
+oiSrc = useOnline and onlineOiSup > 0 ? "NSE online" : useOnline ? "Fetch needed" : volFound > 0 ? "TV vol" : "No data"
 oiSupTxt = not na(oiSup) ? str.tostring(oiSup, "#") : "—"
 oiResTxt = not na(oiRes) ? str.tostring(oiRes, "#") : "—"
 
