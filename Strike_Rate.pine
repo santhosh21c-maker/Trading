@@ -2,19 +2,26 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              S T R I K E   R A T E
 //                    Signal engine for Indian index options
-//                         Lab-tuned defaults · v1.0
+//                         Lab-tuned defaults · v1.1
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 //  Runs on OPTION charts only (Nifty / Bank Nifty / Sensex CE and PE).
 //  The index feed is pulled in automatically for direction — never apply this
 //  script to a futures or index chart.
 //
+//  v1.1 AUDIT FIXES  (see STRIKE_RATE_AUDIT.md)
+//    • Confluence = same-bar entry VOTES (not “engines already in”).
+//    • Hold to T1 ON by default — ignore signal exits until half is banked.
+//    • Dashboard T1% = booked half, not MFE touch.
+//    • Optional ADX chop filter on the index feed.
+//    • Max entries / day to match lab frequency.
+//
 //  TWO MODES
 //    SNIPER   — 5 signals. Fewer trades, higher hit rate.  ← default
 //    SCANNER  — 9 signals. Roughly double the trades, slightly lower hit rate.
 //
 //  RECOMMENDED SETUP  (from lab + trade-plan research)
-//    Sniper · Two must agree · 5-minute signals · T1 10 / T2 30 / Stop 18
+//    Sniper · Two must agree · 5-minute signals · T1 10 / T2 30 / Stop 18 · Hold to T1
 //
 //  LAB FINDINGS (Nifty CE/PE · multi-strike · Apr–Jul 2025 · this repo)
 //    Stop 18 beat tighter stops (10–15 sat inside premium noise and cut winners).
@@ -24,6 +31,7 @@
 //    Broad panel (~128 runners trades, 40 contracts): ~38% tagged T1, ~32% T2,
 //    ~27% T3-class extension, ~63% stopped. ATM and PE months fared better than
 //    chasing every ITM strike. Backtests flatter — trade small until your log agrees.
+//    Honest limit: +10 every day / every trade is NOT achievable with a finite stop.
 //
 //  QUICK START
 //    1. Open an ATM option chart, 5-minute.
@@ -84,7 +92,15 @@ showEarly = input.bool(true, "Early warning dot", group = G4, tooltip = "Dot und
 showZone  = input.bool(true, "Draw target / stop zones", group = G4)
 tblPos    = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G4)
 tblSize   = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G4)
-chartSig  = input.string("Two must agree", "Chart signals from", options = ["Any engine", "Two must agree", "Anchor", "Ignition", "Drift", "Surge"], group = G4, tooltip = "Drives BUY/EXIT labels, candle colour, live panel, alerts.\n\nTWO MUST AGREE — lab default. Strict confluence, ~1 signal/day class frequency on ATM.\nANY ENGINE — more signals, lower quality.\nOr follow a single named engine.\n\nDashboard always lists every enabled engine.")
+chartSig  = input.string("Two must agree", "Chart signals from", options = ["Any engine", "Two must agree", "Anchor", "Ignition", "Drift", "Surge"], group = G4, tooltip = "Drives BUY/EXIT labels, candle colour, live panel, alerts.\n\nTWO MUST AGREE — lab default. v1.1: requires N engines to FIRE entry on the SAME bar (votes), not merely be in trades from earlier bars.\nANY ENGINE — more signals, lower quality.\nOr follow a single named engine.\n\nDashboard always lists every enabled engine.")
+
+G4b = "④b  Accuracy filters"
+holdToT1 = input.bool(true, "Hold to T1 (ignore signal exits)", group = G4b, tooltip = "ON (default): before Target 1 is banked, only SL / T2 / EOD can exit. Engine cross-backs cannot cut a winner early.\n\nLab preferred this. Turn OFF only if you want engines to manage their own early exits.")
+useAdx   = input.bool(true, "ADX chop filter (index)", group = G4b, tooltip = "Skip new entries when index ADX is below Min ADX (chop). Uses the same signal timeframe as the engines.")
+adxLen   = input.int(14, "ADX length", minval = 5, group = G4b)
+adxMin   = input.float(18.0, "Min ADX", minval = 1, step = 0.5, group = G4b)
+maxDay   = input.int(2, "Max chart entries per day", minval = 1, maxval = 10, group = G4b, tooltip = "Applies to the chart track only (the row you follow). Lab frequency is ~1/signal-day.")
+strongPrem = input.bool(false, "Stronger premium confirm", group = G4b, tooltip = "OFF = green bar (close > prior close).\nON = also require body ≥ 0.35 × option ATR(14).")
 
 G5 = "⑤  OI walls (daily S/R)"
 useOI     = input.bool(true, "Show OI support / resistance", group = G5, tooltip = "Shows Support (max Put OI) and Resistance (max Call OI).\n\nONLINE (recommended): levels fetched from NSE and baked into this script via fetch_oi_walls.py — Pine cannot call the internet itself.\nTV ladder: optional fallback using TradingView option symbols.")
@@ -257,7 +273,15 @@ x8B = ta.crossunder(e9, e21) or (dV > 2.0 * vS and bTh and dC < dO)
 x8S = ta.crossover(e9, e21) or (dV > 2.0 * vS and tTh and dC > dO)
 
 f_pick(b, s) => isCE ? b : s
-premOK = close > close[1]
+optAtr = ta.atr(14)
+premOK = strongPrem ? (close > close[1] and math.abs(close - open) >= 0.35 * nz(optAtr, 1.0)) : close > close[1]
+
+// Index ADX on signal TF (chop filter)
+f_adx() =>
+    [_dp, _dm, a] = ta.dmi(adxLen, adxLen)
+    a
+adxRaw = request.security(undSym, sigTF, f_adx(), barmerge.gaps_off, barmerge.lookahead_off)
+adxOK = not useAdx or nz(adxRaw) >= adxMin
 
 // ─────────────────────────── FILTERS ───────────────────────────
 inSes  = not na(time(timeframe.period, sesTime, "Asia/Kolkata"))
@@ -268,7 +292,7 @@ corr   = ta.correlation(close, uC, 20)
 sgn    = isCE ? 1.0 : -1.0
 syncOK = nz(corr) * sgn >= 0.30
 sideOK = side == "Auto" ? true : side == "Calls only" ? isCE : not isCE
-allow  = timeOK and syncOK and sideOK and premOK
+allow  = timeOK and syncOK and sideOK and premOK and adxOK
 flatNow = sesOn and inFlat
 
 // ─────────────────────────── OI WALLS ───────────────────────────
@@ -367,6 +391,7 @@ var array<int>   nHit2 = array.new<int>(9, 0)
 var array<int>   nSl   = array.new<int>(9, 0)
 var array<float> sumP  = array.new<float>(9, 0.0)
 var array<float> sumM  = array.new<float>(9, 0.0)
+var int dayEntries = 0
 
 // Sniper: Anchor, Ignition, Drift, Surge + Confluence track
 // Scanner: adds Tide, Slipstream, Coil, Fracture
@@ -378,15 +403,23 @@ var string exWhyHold = ""
 string exWhy = ""
 names = array.from("Anchor", "Tide", "Ignition", "Drift", "Slipstream", "Coil", "Fracture", "Surge", consN == 1 ? "Any engine" : "Two agree")
 
+if newDay
+    dayEntries := 0
+
 if barstate.isconfirmed
     for i = 0 to 8
+        // Confluence track: same-bar VOTES (v1.1) — not “already in from earlier bars”
         if i == 8
-            ac = 0
+            votes = 0
+            alive = 0
             for j = 0 to 7
+                if array.get(on, j) and array.get(ent, j)
+                    votes := votes + 1
                 if array.get(on, j) and array.get(stIn, j)
-                    ac := ac + 1
-            array.set(ent, 8, ac >= consN)
-            array.set(exi, 8, ac == 0)
+                    alive := alive + 1
+            array.set(ent, 8, votes >= consN)
+            // Signal-exit for confluence: agreement broken (alive < consN). Hold-to-T1 can suppress this.
+            array.set(exi, 8, alive < consN)
 
         if array.get(stIn, i)
             e  = array.get(stEnt, i)
@@ -397,6 +430,7 @@ if barstate.isconfirmed
             bool  out = false
             float opx = na
             bool  wasSl = false
+            bool  booked = array.get(st1, i)
 
             if low <= sp
                 out := true
@@ -405,8 +439,9 @@ if barstate.isconfirmed
                 if i == dIdx
                     exWhy := "SL"
             else
-                if not array.get(st1, i) and high >= e + tp1p
+                if not booked and high >= e + tp1p
                     array.set(st1, i, true)
+                    booked := true
                     rl := rl + 0.5 * tp1p
                     rm := rm - 0.5
                     sp := e
@@ -417,11 +452,19 @@ if barstate.isconfirmed
                     opx := e + tp2p
                     if i == dIdx
                         exWhy := "T2"
-                if not out and (array.get(exi, i) or flatNow)
+                // Signal / EOD exits — hold-to-T1 blocks engine exits until half is banked
+                sigExit = array.get(exi, i)
+                allowSigExit = (not holdToT1) or booked
+                if not out and flatNow
                     out := true
                     opx := close
                     if i == dIdx
-                        exWhy := flatNow ? "EOD" : "EXIT"
+                        exWhy := "EOD"
+                else if not out and sigExit and allowSigExit
+                    out := true
+                    opx := close
+                    if i == dIdx
+                        exWhy := "EXIT"
 
             if out
                 if rm > 0
@@ -430,11 +473,12 @@ if barstate.isconfirmed
                 array.set(nTr, i, array.get(nTr, i) + 1)
                 array.set(sumP, i, array.get(sumP, i) + rl)
                 array.set(sumM, i, array.get(sumM, i) + m)
-                if m >= tp1p
+                // Booked T1 only (honest) — not MFE spike on an SL bar
+                if booked
                     array.set(nHit, i, array.get(nHit, i) + 1)
                 if m >= tp2p
                     array.set(nHit2, i, array.get(nHit2, i) + 1)
-                if wasSl and not array.get(st1, i)
+                if wasSl and not booked
                     array.set(nSl, i, array.get(nSl, i) + 1)
                 array.set(stIn, i, false)
                 array.set(stEnt, i, na)
@@ -448,7 +492,8 @@ if barstate.isconfirmed
                 array.set(stRem, i, rm)
                 array.set(stRe, i, rl)
         else
-            if array.get(on, i) and array.get(ent, i) and allow and not flatNow and close > 0
+            dayCapOK = i != dIdx or dayEntries < maxDay
+            if array.get(on, i) and array.get(ent, i) and allow and not flatNow and close > 0 and dayCapOK
                 array.set(stIn, i, true)
                 array.set(stEnt, i, close)
                 array.set(stStp, i, close - slp)
@@ -456,6 +501,8 @@ if barstate.isconfirmed
                 array.set(stRem, i, 1.0)
                 array.set(stRe, i, 0.0)
                 array.set(stMFE, i, 0.0)
+                if i == dIdx
+                    dayEntries := dayEntries + 1
 
 dIn   = array.get(stIn, dIdx)
 dPart = array.get(st1, dIdx)
@@ -520,8 +567,8 @@ if showTbl and barstate.islast
     sz = f_sz(tblSize)
     table.cell(tb, 0, 0, "STRIKE RATE", bgcolor = hb, text_color = tw, text_size = sz, text_halign = text.align_left)
     table.cell(tb, 1, 0, "Trades", bgcolor = hb, text_color = tw, text_size = sz)
-    table.cell(tb, 2, 0, "T1%",   bgcolor = hb, text_color = tw, text_size = sz)
-    table.cell(tb, 3, 0, "T2%",   bgcolor = hb, text_color = tw, text_size = sz)
+    table.cell(tb, 2, 0, "T1%",   bgcolor = hb, text_color = tw, text_size = sz)  // booked half
+    table.cell(tb, 3, 0, "T2%",   bgcolor = hb, text_color = tw, text_size = sz)  // MFE ≥ T2
     table.cell(tb, 4, 0, "Avg",   bgcolor = hb, text_color = tw, text_size = sz)
     table.cell(tb, 5, 0, "Best",  bgcolor = hb, text_color = tw, text_size = sz)
     table.cell(tb, 6, 0, "Total", bgcolor = hb, text_color = tw, text_size = sz)
@@ -552,7 +599,7 @@ if showTbl and barstate.islast
             r := r + 1
 
     fb = color.new(#0b1220, 0)
-    ftxt = (isCE ? "CALL" : "PUT") + "   ·   " + mode + "   ·   T1 " + str.tostring(tp1p, "#") + " / T2 " + str.tostring(tp2p, "#") + " / Stop " + str.tostring(slp, "#") + "   ·   half@T1 · runner@T2   ·   no slippage/brokerage"
+    ftxt = (isCE ? "CALL" : "PUT") + "   ·   " + mode + "   ·   T1 " + str.tostring(tp1p, "#") + " / T2 " + str.tostring(tp2p, "#") + " / Stop " + str.tostring(slp, "#") + "   ·   T1%=booked   ·   holdT1 " + (holdToT1 ? "ON" : "OFF") + "   ·   no slip/brokerage"
     table.cell(tb, 0, r, ftxt, bgcolor = fb, text_color = color.new(color.white, 35), text_size = sz, text_halign = text.align_left)
     for c = 1 to 7
         table.cell(tb, c, r, "", bgcolor = fb, text_size = sz)
