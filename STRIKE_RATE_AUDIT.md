@@ -133,4 +133,5 @@ What will **not** magically raise accuracy: more engines (Scanner), “Any engin
 
 **Keep** the product shape and the 10 / 30 / 18 half-runner plan.  
 **Fix** confluence voting, hold-to-T1, and dashboard honesty (done in v1.1).  
+**Add** buyer filters: DTE gate, India VIX rank, post-SL cooldown (done in v1.2).  
 **Drop** any expectation of +10 every day — chase **positive expectancy per expiry**, not a daily guarantee.
