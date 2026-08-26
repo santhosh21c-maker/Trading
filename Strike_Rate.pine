@@ -175,14 +175,15 @@ f_dte(string yymmdd) =>
 f_exp_from_ticker(string t) =>
     string found = na
     dig = str.match(t, "[0-9]{6}")
-    if f_yymmdd_ok(dig)
+    if not na(dig) and f_yymmdd_ok(dig)
         found := dig
     found
 
 expAuto = f_exp_from_ticker(tkr)
 expUsed = expSrc == "Manual only" ? expManual : (not na(expAuto) and f_yymmdd_ok(expAuto) ? expAuto : expManual)
 dteVal  = f_dte(expUsed)
-dteOK   = not useDte or na(dteVal) or dteVal > minDte
+// If DTE filter is ON but expiry unknown → block (set Manual YYMMDD)
+dteOK   = not useDte or (not na(dteVal) and dteVal > minDte)
 dteTxt  = na(dteVal) ? "—" : str.tostring(dteVal, "#")
 
 // ── IV regime via India VIX rank ──

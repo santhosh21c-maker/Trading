@@ -2,7 +2,7 @@
 
 | File | What |
 |------|------|
-| **`Strike_Rate.pine`** | Main: Frequency preset (~2 entries/day) or Quality (Sniper) · T1 10 / T2 30 / SL 18 |
+| **`Strike_Rate.pine`** | Main v1.2: Frequency/Quality · buyer filters (DTE, IV, cooldown) · T1 10 / T2 30 / SL 18 |
 | `STRIKE_RATE_FREQ_REPORT.md` | Multi-strike entries-per-day lab |
 | `STRIKE_RATE_AUDIT.md` | Full audit — what’s right, wrong, and how to improve |
 | `README_STRIKE_RATE.md` | How to use Strike Rate |
