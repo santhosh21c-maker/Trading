@@ -1,0 +1,741 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              S T R I K E   R A T E
+//                    Signal engine for Indian index options
+//                         Lab-tuned defaults · v1.2
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//  Runs on OPTION charts only (Nifty / Bank Nifty / Sensex CE and PE).
+//  The index feed is pulled in automatically for direction — never apply this
+//  script to a futures or index chart.
+//
+//  v1.2 BUYER FILTERS
+//    • DTE gate — block new buys inside N days of expiry (theta/gamma junk).
+//    • IV regime — India VIX rank; skip when vol is already rich.
+//    • Post-SL cooldown — dead time after a stop (no revenge re-entry).
+//
+//  v1.1 AUDIT FIXES  (see STRIKE_RATE_AUDIT.md)
+//    • Confluence = same-bar entry VOTES (not “engines already in”).
+//    • Hold to T1 ON by default — ignore signal exits until half is banked.
+//    • Dashboard T1% = booked half, not MFE touch.
+//    • Optional ADX chop filter on the index feed.
+//    • Max entries / day to match lab frequency.
+//
+//  TWO MODES
+//    SNIPER   — 5 signals. Fewer trades, higher hit rate.  ← default
+//    SCANNER  — 9 signals. Roughly double the trades, slightly lower hit rate.
+//
+//  FREQUENCY TARGET (≥2 entries / day on ATM — lab, 59 Nifty sessions)
+//    Mode Scanner · Chart signals "Any engine" · Max entries/day 3 · ADX OFF
+//    Measured ~2.1 CE / ~1.9 PE entries per session-day on ATM; ≥2 on ~70% of days.
+//    Trade-off: more signals, noisier than Sniper·Two-agree (quality preset).
+//
+//  QUALITY PRESET (fewer, cleaner)
+//    Sniper · Two must agree · Max 2 · ADX ON  → ~0.3/session-day · ~1.2 on active days
+//
+//  LAB FINDINGS (Nifty CE/PE · multi-strike · Apr–Jul 2025 · this repo)
+//    Stop 18 beat tighter stops (10–15 sat inside premium noise and cut winners).
+//    Full exit at +10 with SL18 was net-negative — the runner to T2 is required.
+//    Half at T1 → stop to entry · half runs to T2 30.
+//    See STRIKE_RATE_FREQ_REPORT.md for the entries-per-day sweep.
+//    Honest limit: +10 every day / every trade is NOT achievable with a finite stop.
+//
+//  QUICK START
+//    1. Open an ATM option chart, 5-minute.
+//    2. Set "Index feed" to the matching futures symbol.
+//    3. Pick your mode. Set "Side" from your own pre-market view, or leave Auto.
+//    4. Green candles = position open. Red = flat. Pale green = T1 already banked.
+//
+//  Targets and stop are in OPTION POINTS. Defaults are tuned for Nifty; raise
+//  them proportionally for Bank Nifty and Sensex, whose premiums move further.
+//
+//  ON THE TRADE PLAN
+//  Half books at 10 points, half runs to 30, stop at 18. After T1 the stop moves
+//  to entry on the runner. Closing the second half early (e.g. at 20) cuts the
+//  expectancy that lives in the runner — lab SL18 lock-at-10 was deeply red.
+//  Option stops gap: budget ~1.3× the printed stop when you size.
+//
+//  DASHBOARD figures are calculated on the bars loaded on your chart. They
+//  assume entry at the signal bar's close with NO slippage and NO brokerage.
+//  Past behaviour is not a forecast. Position size accordingly.
+//
+//  OI WALLS
+//  TradingView Pine CANNOT fetch the internet. Real NSE OI is pulled by
+//  fetch_oi_walls.py and baked into this file (Support = max Put OI,
+//  Resistance = max Call OI). Re-run that script to refresh, then re-paste
+//  the indicator (or pull the updated raw file). On index/futures charts the
+//  walls plot as lines; on option charts they show in the panel / labels.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+indicator("STRIKE RATE", "STRIKERATE", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, dynamic_requests = true)
+
+// ─────────────────────────── SETTINGS ───────────────────────────
+G1 = "①  Setup"
+preset  = input.string("Frequency (≥2/day)", "Preset", options = ["Frequency (≥2/day)", "Quality (Sniper)"], group = G1, tooltip = "FREQUENCY — Scanner · Any engine · max 3/day · ADX off.\nLab (~59 Nifty sessions, ATM±100): ~2 entries/session-day on ATM; ≥2 on ~70% of days.\n\nQUALITY — Sniper · Two must agree · max 2 · ADX on.\n~0.3/session-day; ~1.2 on days that fire. Cleaner, fewer trades.")
+modeIn  = input.string("Auto (from preset)", "Mode", options = ["Auto (from preset)", "Sniper", "Scanner"], group = G1, tooltip = "Auto follows Preset. Override only if you know why.")
+side     = input.string("Auto", "Side", options = ["Auto", "Calls only", "Puts only"], group = G1, tooltip = "Set this from your own pre-market view. On a CALL chart with 'Puts only' selected, nothing will fire — that is intended.")
+undSym   = input.symbol("NSE:NIFTY1!", "Index feed", group = G1, tooltip = "Use the FUTURES symbol for the index this option belongs to.\nNifty → NSE:NIFTY1!\nBank Nifty → NSE:BANKNIFTY1!\nSensex → BSE:SENSEX1!")
+sigTF    = input.timeframe("5", "Signal timeframe", options = ["1", "3", "5", "15"], group = G1, tooltip = "SIGNALS are calculated on this TF — separate from the chart you view.\n\nKeep at 5. View on 1m/3m for finer entries if you want.\n1 or 3 here is a different, less-tested system.")
+optType  = input.string("Auto", "Option type", options = ["Auto", "Call", "Put"], group = G1, tooltip = "Auto reads CE/PE from the ticker. Override only if the panel shows the wrong type.")
+
+G2 = "②  Trade plan  (option points)"
+tp1p = input.float(10.0, "Target 1", minval = 1, step = 1, group = G2, tooltip = "Half the position books here; stop on the runner moves to entry.\n\nNifty 10 · Bank Nifty ~25 · Sensex ~20\n\nLab: locking the WHOLE trade at +10 with SL18 was net-negative. Half-out here funds the stop-gap risk; the edge sits in the runner.")
+tp2p = input.float(30.0, "Target 2", minval = 1, step = 1, group = G2, tooltip = "Remaining half runs here. Lab: letting winners extend past +10 was required for SL18 to have a chance. Capping the runner at 20 measurably hurts.")
+slp  = input.float(18.0, "Stop", minval = 1, step = 1, group = G2, tooltip = "18 is deliberate.\n\nLab grid (same entries): SL10–15 sat inside noise and cut trades that later reached +10. SL18 was the first balanced stop that stayed usable; SL30 tagged +10 more often but loses harder when wrong.\n\nOption premiums gap through stops — size for ~1.3× fill.")
+
+G3 = "③  Session"
+sesOn   = input.bool(true, "Use session filter", group = G3)
+sesTime = input.session("0920-1445", "Trading hours", group = G3)
+muteOn  = input.bool(true, "Skip midday", group = G3, tooltip = "Blocks new entries during the low-volatility lunch window.")
+muteSes = input.session("1215-1315", "Midday window", group = G3)
+flatSes = input.session("1510-1520", "Exit all by", group = G3)
+
+G4 = "④  Display"
+showPnl   = input.bool(true, "Trade panel (entry desk)", group = G4, tooltip = "Compact panel: status, entry, T1/T2/stop, gates. This is what you need to take a trade.")
+showTbl   = input.bool(false, "Engine stats table", group = G4, tooltip = "OFF by default — verbose per-engine backtest stats. Turn on only when reviewing engines.")
+showOiPanel = input.bool(false, "Show OI on trade panel", group = G4, tooltip = "OI S/R stay on chart labels when enabled in ⑤. Panel line is optional to save space.")
+paint     = input.bool(true, "Paint candles", group = G4)
+showLbl   = input.bool(true, "Signal labels", group = G4)
+showPx    = input.bool(true, "Show entry price on the buy label", group = G4)
+showEarly = input.bool(true, "Early warning dot", group = G4, tooltip = "Dot under the bar when an engine fires BEFORE bar close / confirmed BUY.\nHeads-up only — can vanish. Excluded from dashboard stats.")
+showZone  = input.bool(true, "Draw target / stop zones", group = G4)
+tblPos    = input.string("Top right", "Engine stats position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G4)
+tblSize   = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G4)
+chartSigIn = input.string("Auto (from preset)", "Chart signals from", options = ["Auto (from preset)", "Any engine", "Two must agree", "Anchor", "Ignition", "Drift", "Surge"], group = G4, tooltip = "Auto: Frequency→Any engine · Quality→Two must agree.\nDrives BUY/EXIT labels, candle colour, live panel, alerts.")
+
+G4b = "④b  Accuracy filters"
+holdToT1 = input.bool(true, "Hold to T1 (ignore signal exits)", group = G4b, tooltip = "ON (default): before Target 1 is banked, only SL / T2 / EOD can exit. Engine cross-backs cannot cut a winner early.\n\nLab preferred this. Turn OFF only if you want engines to manage their own early exits.")
+useAdxIn = input.string("Auto (from preset)", "ADX chop filter", options = ["Auto (from preset)", "On", "Off"], group = G4b, tooltip = "Auto: Frequency→Off · Quality→On.\nSkip new entries when index ADX is below Min ADX.")
+adxLen   = input.int(14, "ADX length", minval = 5, group = G4b)
+adxMin   = input.float(18.0, "Min ADX", minval = 1, step = 0.5, group = G4b)
+maxDayIn = input.int(0, "Max chart entries per day (0=preset)", minval = 0, maxval = 10, group = G4b, tooltip = "0 = preset default (Frequency 3 · Quality 2).\nLab: max 3 with Scanner·Any ≈ 2 entries/session-day on ATM.")
+strongPrem = input.bool(false, "Stronger premium confirm", group = G4b, tooltip = "OFF = green bar (close > prior close).\nON = also require body ≥ 0.35 × option ATR(14).")
+
+G6 = "⑥  Option-buyer filters"
+useDte   = input.bool(true, "Block near expiry (DTE)", group = G6, tooltip = "No new entries when days-to-expiry ≤ Min DTE.\nExpiry week is where theta and gamma eat buyers.")
+minDte   = input.int(3, "Min DTE (days)", minval = 0, maxval = 30, group = G6, tooltip = "3 = stop new buys from expiry−3 onward (still manage open trades).")
+expSrc   = input.string("Auto then manual", "Expiry source", options = ["Auto then manual", "Manual only"], group = G6, tooltip = "Auto tries YYMMDD from the option ticker (e.g. NIFTY260901P24300).\nIf that fails, uses Manual YYMMDD.")
+expManual = input.string("260901", "Manual expiry YYMMDD", group = G6, tooltip = "Update when the contract rolls. Same idea as the OI ladder expiry.")
+
+useIv    = input.bool(true, "IV regime filter (India VIX)", group = G6, tooltip = "Blocks new buys when India VIX rank is too high — buying rich premium is the silent leak for option buyers.")
+vixSym   = input.symbol("NSE:INDIAVIX", "VIX symbol", group = G6)
+ivLook   = input.int(60, "IV rank lookback (days)", minval = 20, maxval = 252, group = G6)
+maxIvR   = input.float(70.0, "Max IV rank %", minval = 10, maxval = 100, step = 5, group = G6, tooltip = "Skip new entries when IV rank > this.\n70 = allow normal/elevated; block panic-rich vol. Lower (50–60) = stricter.")
+
+useCool  = input.bool(true, "Cooldown after stop", group = G6, tooltip = "After the chart track hits SL, block new chart entries for N minutes.")
+coolMins = input.int(30, "Cooldown minutes", minval = 5, maxval = 120, group = G6, tooltip = "30 minutes on a 5m chart ≈ 6 bars. Stops revenge double-entries when chasing 2+/day.")
+
+G5 = "⑤  OI walls (daily S/R)"
+useOI     = input.bool(true, "Show OI support / resistance", group = G5, tooltip = "Shows Support (max Put OI) and Resistance (max Call OI).\n\nONLINE (recommended): levels fetched from NSE and baked into this script via fetch_oi_walls.py — Pine cannot call the internet itself.\nTV ladder: optional fallback using TradingView option symbols.")
+oiSource  = input.string("Online NSE (baked)", "OI source", options = ["Online NSE (baked)", "TradingView ladder"], group = G5, tooltip = "Online NSE = last fetch from fetch_oi_walls.py (real NSE OI).\nRe-run that script (or ask the agent) to refresh.\nTV ladder needs expiry + working TV option symbols.")
+oiExpiry  = input.string("250731", "TV ladder expiry YYMMDD", group = G5, tooltip = "Only for TradingView ladder mode.")
+oiRoot    = input.string("AUTO", "Option root", options = ["AUTO", "NIFTY", "BANKNIFTY", "SENSEX"], group = G5)
+oiStep    = input.int(0, "Strike step (0 = auto)", minval = 0, step = 50, group = G5)
+oiSide    = input.int(5, "TV ladder: strikes each side", minval = 2, maxval = 8, group = G5)
+oiFmt     = input.string("YYMMDD + C/P + strike", "TV symbol format", options = ["YYMMDD + C/P + strike", "YYMMDD + strike + CE/PE"], group = G5)
+oiVolFB   = input.bool(true, "TV ladder: use volume walls", group = G5, tooltip = "Pine v6 has no openinterest built-in for option symbols. TV ladder mode ranks strikes by daily volume as a wall proxy. Prefer Online NSE (baked) for real OI.")
+showOiLbl = input.bool(true, "Label OI walls on chart", group = G5)
+plotOiLines = input.bool(true, "Plot lines when price looks like index", group = G5, tooltip = "If chart close > 1000 (index/futures scale), draw S/R lines at OI strikes.\nOn option premium charts, lines stay off — strikes show in the panel.")
+
+// ─────────────────────────── INTERNAL ───────────────────────────
+freqPreset = preset == "Frequency (≥2/day)"
+mode = modeIn == "Auto (from preset)" ? (freqPreset ? "Scanner" : "Sniper") : modeIn
+chartSig = chartSigIn == "Auto (from preset)" ? (freqPreset ? "Any engine" : "Two must agree") : chartSigIn
+useAdx = useAdxIn == "Auto (from preset)" ? (not freqPreset) : useAdxIn == "On"
+maxDay = maxDayIn == 0 ? (freqPreset ? 3 : 2) : maxDayIn
+scanner = mode == "Scanner"
+consN   = chartSig == "Two must agree" ? 2 : 1
+dIdx    = chartSig == "Anchor" ? 0 : chartSig == "Ignition" ? 2 : chartSig == "Drift" ? 3 : chartSig == "Surge" ? 7 : 8
+
+tkr = str.upper(syminfo.ticker)
+aCE = str.endswith(tkr, "CE") or not na(str.match(tkr, "[0-9]C[0-9]+$")) or str.contains(tkr, "CALL")
+aPE = str.endswith(tkr, "PE") or not na(str.match(tkr, "[0-9]P[0-9]+$")) or str.contains(tkr, "PUT")
+isCE = optType == "Call" ? true : optType == "Put" ? false : aCE ? true : aPE ? false : true
+
+// ── DTE (days to expiry) ──
+f_yymmdd_ok(string s) =>
+    ok = false
+    if str.length(s) == 6
+        yy = str.tonumber(str.substring(s, 0, 2))
+        mm = str.tonumber(str.substring(s, 2, 4))
+        dd = str.tonumber(str.substring(s, 4, 6))
+        ok := not na(yy) and not na(mm) and not na(dd) and mm >= 1 and mm <= 12 and dd >= 1 and dd <= 31
+    ok
+
+f_dte(string yymmdd) =>
+    float out = na
+    if f_yymmdd_ok(yymmdd)
+        yy = int(str.tonumber(str.substring(yymmdd, 0, 2)))
+        mm = int(str.tonumber(str.substring(yymmdd, 2, 4)))
+        dd = int(str.tonumber(str.substring(yymmdd, 4, 6)))
+        expT = timestamp("Asia/Kolkata", 2000 + yy, mm, dd, 15, 30)
+        out := math.floor((expT - time) / 86400000.0)
+    out
+
+// Prefer first valid YYMMDD embedded in the ticker (e.g. NIFTY260901P24300)
+f_exp_from_ticker(string t) =>
+    string found = na
+    dig = str.match(t, "[0-9]{6}")
+    if not na(dig) and f_yymmdd_ok(dig)
+        found := dig
+    found
+
+expAuto = f_exp_from_ticker(tkr)
+expUsed = expSrc == "Manual only" ? expManual : (not na(expAuto) and f_yymmdd_ok(expAuto) ? expAuto : expManual)
+dteVal  = f_dte(expUsed)
+// If DTE filter is ON but expiry unknown → block (set Manual YYMMDD)
+dteOK   = not useDte or (not na(dteVal) and dteVal > minDte)
+dteTxt  = na(dteVal) ? "—" : str.tostring(dteVal, "#")
+
+// ── IV regime via India VIX rank ──
+vixC = request.security(vixSym, "D", close, ignore_invalid_symbol = true, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+vixHi = ta.highest(vixC, ivLook)
+vixLo = ta.lowest(vixC, ivLook)
+ivRank = (nz(vixHi) - nz(vixLo)) > 0 ? 100.0 * (nz(vixC) - nz(vixLo)) / (nz(vixHi) - nz(vixLo)) : na
+ivOK = not useIv or na(ivRank) or ivRank <= maxIvR
+ivTxt = na(ivRank) ? "—" : str.tostring(ivRank, "#") + "%"
+vixTxt = na(vixC) ? "—" : str.tostring(vixC, "#.#")
+
+[uO, uH, uL, uC, uV] = request.security(undSym, sigTF, [open, high, low, close, volume], barmerge.gaps_off, barmerge.lookahead_off)
+dO = uO
+dH = uH
+dL = uL
+dC = uC
+dV = nz(uV) <= 0 ? nz(volume) : uV
+
+dTR  = math.max(dH - dL, math.max(math.abs(dH - nz(dC[1], dC)), math.abs(dL - nz(dC[1], dC))))
+dAtr = ta.rma(dTR, 14)
+[pdH, pdL, pdC] = request.security(undSym, "D", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
+newDay = ta.change(time("D")) != 0
+
+var float cPV = 0.0
+var float cV  = 0.0
+dTyp = (dH + dL + dC) / 3
+if newDay
+    cPV := 0.0
+    cV  := 0.0
+cPV := cPV + dTyp * dV
+cV  := cV + dV
+vwap = cV > 0 ? cPV / cV : dC
+
+pP  = (pdH + pdL + pdC) / 3
+pB0 = (pdH + pdL) / 2
+pT0 = 2 * pP - pB0
+pTC = math.max(pT0, pB0)
+pBC = math.min(pT0, pB0)
+pR1 = 2 * pP - pdL
+pS1 = 2 * pP - pdH
+
+var int   dayStart = na
+var float orH = na
+var float orL = na
+var bool  orUp = false
+var bool  orDn = false
+if newDay
+    dayStart := time
+    orH      := dH
+    orL      := dL
+    orUp     := false
+    orDn     := false
+minsIn = na(dayStart) ? 0.0 : (time - dayStart) / 60000.0
+inOR   = minsIn < 30
+if inOR and not newDay
+    orH := math.max(nz(orH, dH), dH)
+    orL := math.min(nz(orL, dL), dL)
+orDone = not inOR and not na(orH)
+if orDone and dC > orH
+    orUp := true
+if orDone and dC < orL
+    orDn := true
+
+f_st(h, l, c, fac, len) =>
+    tr  = math.max(h - l, math.max(math.abs(h - nz(c[1], c)), math.abs(l - nz(c[1], c))))
+    atr = ta.rma(tr, len)
+    mid = (h + l) / 2
+    ub  = mid + fac * atr
+    lb  = mid - fac * atr
+    var float fu = 0.0
+    var float fl = 0.0
+    var int   d  = 1
+    fu := (ub < nz(fu[1], ub) or nz(c[1], c) > nz(fu[1], ub)) ? ub : nz(fu[1], ub)
+    fl := (lb > nz(fl[1], lb) or nz(c[1], c) < nz(fl[1], lb)) ? lb : nz(fl[1], lb)
+    d  := c > nz(fu[1], ub) ? 1 : c < nz(fl[1], lb) ? -1 : nz(d[1], 1)
+    [d == 1 ? fl : fu, d]
+[sf, dirF] = f_st(dH, dL, dC, 1.5, 7)
+[ss, dirS] = f_st(dH, dL, dC, 3.0, 10)
+
+e9  = ta.ema(dC, 9)
+e21 = ta.ema(dC, 21)
+e50 = ta.ema(dC, 50)
+slUp = (e50 - e50[3]) > 0
+slDn = (e50 - e50[3]) < 0
+xUp = ta.crossover(e9, e21)
+xDn = ta.crossunder(e9, e21)
+sXU = ta.barssince(xUp)
+sXD = ta.barssince(xDn)
+
+bbD = 2.0 * ta.stdev(dC, 20)
+kcR = ta.rma(dTR, 20) * 1.5
+sqz = bbD < kcR
+fire = not sqz and sqz[1]
+ref  = math.avg(math.avg(ta.highest(dH, 20), ta.lowest(dL, 20)), ta.sma(dC, 20))
+mom  = ta.linreg(dC - ref, 20, 0)
+sF   = ta.barssince(fire)
+
+ph = ta.pivothigh(dH, 5, 5)
+pl = ta.pivotlow(dL, 5, 5)
+var float lPH = na
+var float lPL = na
+if not na(ph)
+    lPH := ph
+if not na(pl)
+    lPL := pl
+var float bUp = na
+var float bDn = na
+
+vS  = ta.sma(dV, 20)
+wid = (dH - dL) > 1.2 * dAtr
+tTh = (dH - dL) > 0 and (dC - dL) > 0.66 * (dH - dL)
+bTh = (dH - dL) > 0 and (dH - dC) > 0.66 * (dH - dL)
+
+// ── signal definitions ──
+// Hoist all ta.crossover / ta.crossunder to globals (CW10002 — must run every bar).
+xoPTC  = ta.crossover(dC, pTC)
+xoPR1  = ta.crossover(dC, pR1)
+xoPP   = ta.crossover(dC, pP)
+xuPBC  = ta.crossunder(dC, pBC)
+xuPS1  = ta.crossunder(dC, pS1)
+xuPP   = ta.crossunder(dC, pP)
+xoVwap = ta.crossover(dC, vwap)
+xuVwap = ta.crossunder(dC, vwap)
+xoLPH  = ta.crossover(dC, lPH)
+xuLPL  = ta.crossunder(dC, lPL)
+
+a1B = xoPTC or xoPR1 or (dL <= pS1 and dC > pS1 and dC > dO)
+a1S = xuPBC or xuPS1 or (dH >= pR1 and dC < pR1 and dC < dO)
+x1B = xuPBC or xuPP
+x1S = xoPTC or xoPP
+
+a2B = xoVwap and dC > dO and (dC - vwap) >= 0.30 * dAtr
+a2S = xuVwap and dC < dO and (vwap - dC) >= 0.30 * dAtr
+x2B = xuVwap
+x2S = xoVwap
+
+a3B = orUp[1] and dL <= orH and dC > orH and dC > dO
+a3S = orDn[1] and dH >= orL and dC < orL and dC < dO
+oM  = (nz(orH) + nz(orL)) / 2
+x3B = dC < orH and dC < oM
+x3S = dC > orL and dC > oM
+
+a4B = dirF == 1 and dirS == 1 and (dirF[1] != 1 or dirS[1] != 1)
+a4S = dirF == -1 and dirS == -1 and (dirF[1] != -1 or dirS[1] != -1)
+x4B = dirF == -1
+x4S = dirF == 1
+
+a5B = not na(sXU) and sXU <= 3 and e21 > e50 and slUp
+a5S = not na(sXD) and sXD <= 3 and e21 < e50 and slDn
+x5B = xDn
+x5S = xUp
+
+a6B = not na(sF) and sF <= 3 and mom > 0 and mom > mom[1]
+a6S = not na(sF) and sF <= 3 and mom < 0 and mom < mom[1]
+x6B = mom < 0 or (mom < mom[1] and mom[1] < mom[2])
+x6S = mom > 0 or (mom > mom[1] and mom[1] > mom[2])
+
+a7B = not na(lPH) and xoLPH
+a7S = not na(lPL) and xuLPL
+if a7B
+    bUp := lPH
+if a7S
+    bDn := lPL
+x7B = not na(bUp) and dC < bUp
+x7S = not na(bDn) and dC > bDn
+
+a8B = dV > 2.0 * vS and wid and tTh and dC > dO
+a8S = dV > 2.0 * vS and wid and bTh and dC < dO
+x8B = xDn or (dV > 2.0 * vS and bTh and dC < dO)
+x8S = xUp or (dV > 2.0 * vS and tTh and dC > dO)
+
+f_pick(b, s) => isCE ? b : s
+optAtr = ta.atr(14)
+premOK = strongPrem ? (close > close[1] and math.abs(close - open) >= 0.35 * nz(optAtr, 1.0)) : close > close[1]
+
+// Index ADX on signal TF (chop filter)
+f_adx() =>
+    [_dp, _dm, a] = ta.dmi(adxLen, adxLen)
+    a
+adxRaw = request.security(undSym, sigTF, f_adx(), barmerge.gaps_off, barmerge.lookahead_off)
+adxOK = not useAdx or nz(adxRaw) >= adxMin
+
+// ─────────────────────────── FILTERS ───────────────────────────
+inSes  = not na(time(timeframe.period, sesTime, "Asia/Kolkata"))
+inMute = not na(time(timeframe.period, muteSes, "Asia/Kolkata"))
+inFlat = not na(time(timeframe.period, flatSes, "Asia/Kolkata"))
+timeOK = not sesOn or (inSes and not (muteOn and inMute))
+corr   = ta.correlation(close, uC, 20)
+sgn    = isCE ? 1.0 : -1.0
+syncOK = nz(corr) * sgn >= 0.30
+sideOK = side == "Auto" ? true : side == "Calls only" ? isCE : not isCE
+allow  = timeOK and syncOK and sideOK and premOK and adxOK and dteOK and ivOK
+flatNow = sesOn and inFlat
+
+// Post-SL cooldown (chart track only)
+var int lastSlTime = na
+coolOK = not useCool or na(lastSlTime) or (time - lastSlTime) >= coolMins * 60000
+coolLeftMin = useCool and not na(lastSlTime) and not coolOK ? math.ceil((coolMins * 60000 - (time - lastSlTime)) / 60000.0) : 0
+coolTxt = not useCool ? "off" : coolOK ? "ready" : str.tostring(coolLeftMin, "#") + "m left"
+
+// ─────────────────────────── OI WALLS ───────────────────────────
+// Online NSE levels are baked by fetch_oi_walls.py (Pine cannot HTTP-fetch).
+// === ONLINE_OI_BEGIN (auto-filled by fetch_oi_walls.py) ===
+// Fetched 2026-08-17 04:25:44 UTC · NIFTY · expiry 18-08-2026 · spot 24300.35
+// Source: NSE India option-chain (jugaad_data NSELive)
+onlineOiSup = 24300.0
+onlineOiRes = 24400.0
+onlineOiSupLots = 333776
+onlineOiResLots = 305649
+onlineOiLabel = "NIFTY 18-08-2026"
+// === ONLINE_OI_END ===
+
+oiRootS = oiRoot == "AUTO" ? (str.contains(str.upper(undSym), "BANK") ? "BANKNIFTY" : str.contains(str.upper(undSym), "SENSEX") ? "SENSEX" : "NIFTY") : oiRoot
+oiStepS = oiStep > 0 ? oiStep : oiRootS == "NIFTY" ? 50 : 100
+spotD   = request.security(undSym, "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+atmS    = int(math.round(nz(spotD) / oiStepS) * oiStepS)
+expS    = str.tostring(oiExpiry)
+
+f_optSym(int k, bool isCall) =>
+    oiFmt == "YYMMDD + C/P + strike" ? ("NSE:" + oiRootS + expS + (isCall ? "C" : "P") + str.tostring(k)) : ("NSE:" + oiRootS + expS + str.tostring(k) + (isCall ? "CE" : "PE"))
+
+// Pine v6: no `openinterest` built-in on option feeds — TV ladder uses daily volume as wall proxy.
+// Real NSE OI comes from the baked Online NSE block (fetch_oi_walls.py).
+f_wall(string sym) =>
+    vol = request.security(sym, "D", volume, ignore_invalid_symbol = true, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+    volOk = oiVolFB and not na(vol) and vol > 0
+    w = volOk ? float(vol) : 0.0
+    [w, volOk]
+
+float ceWallW = 0.0
+float peWallW = 0.0
+int   ceWallK = na
+int   peWallK = na
+float oiSumCe = 0.0
+float oiSumPe = 0.0
+int   volFound = 0
+
+useOnline = useOI and oiSource == "Online NSE (baked)"
+useTvLadder = useOI and oiSource == "TradingView ladder"
+
+if useTvLadder
+    for off = -8 to 8
+        if math.abs(off) <= oiSide
+            k = atmS + off * oiStepS
+            [wC, okC] = f_wall(f_optSym(k, true))
+            [wP, okP] = f_wall(f_optSym(k, false))
+            if okC or okP
+                volFound := volFound + 1
+            oiSumCe := oiSumCe + wC
+            oiSumPe := oiSumPe + wP
+            if wC > ceWallW
+                ceWallW := wC
+                ceWallK := k
+            if wP > peWallW
+                peWallW := wP
+                peWallK := k
+
+// Resolve final walls
+float oiSup = useOnline and onlineOiSup > 0 ? onlineOiSup : useTvLadder and not na(peWallK) ? float(peWallK) : na
+float oiRes = useOnline and onlineOiRes > 0 ? onlineOiRes : useTvLadder and not na(ceWallK) ? float(ceWallK) : na
+oiPcr = useTvLadder and oiSumCe > 0 ? oiSumPe / oiSumCe : na
+oiSrc = useOnline and onlineOiSup > 0 ? "NSE online" : useOnline ? "Fetch needed" : volFound > 0 ? "TV vol" : "No data"
+oiSupTxt = not na(oiSup) ? str.tostring(oiSup, "#") : "—"
+oiResTxt = not na(oiRes) ? str.tostring(oiRes, "#") : "—"
+
+// Index-scale charts can draw real S/R lines; option premium charts cannot.
+indexScale = close > 1000
+plot(useOI and plotOiLines and indexScale and not na(oiSup) ? oiSup : na, "OI Support", color = color.new(#22d3ee, 0), style = plot.style_linebr, linewidth = 2)
+plot(useOI and plotOiLines and indexScale and not na(oiRes) ? oiRes : na, "OI Resistance", color = color.new(#fb7185, 0), style = plot.style_linebr, linewidth = 2)
+
+var label oiLabS = na
+var label oiLabR = na
+if useOI and showOiLbl and barstate.islast
+    label.delete(oiLabS)
+    label.delete(oiLabR)
+    extra = useOnline ? (" · " + onlineOiLabel) : ""
+    if not na(oiSup)
+        oiLabS := label.new(bar_index, indexScale ? oiSup : low, "OI S " + oiSupTxt + " (max PE)" + extra, style = label.style_label_up, color = color.new(#22d3ee, 10), textcolor = color.black, size = size.small)
+    if not na(oiRes)
+        oiLabR := label.new(bar_index, indexScale ? oiRes : high, "OI R " + oiResTxt + " (max CE)" + extra, style = label.style_label_down, color = color.new(#fb7185, 10), textcolor = color.white, size = size.small)
+
+// ─────────────────────────── STATE ───────────────────────────
+var array<bool>  stIn  = array.new<bool>(9, false)
+var array<float> stEnt = array.new<float>(9, na)
+var array<float> stStp = array.new<float>(9, na)
+var array<bool>  st1   = array.new<bool>(9, false)
+var array<float> stRem = array.new<float>(9, 0.0)
+var array<float> stRe  = array.new<float>(9, 0.0)
+var array<float> stMFE = array.new<float>(9, 0.0)
+var array<int>   nTr   = array.new<int>(9, 0)
+var array<int>   nHit  = array.new<int>(9, 0)
+var array<int>   nHit2 = array.new<int>(9, 0)
+var array<int>   nSl   = array.new<int>(9, 0)
+var array<float> sumP  = array.new<float>(9, 0.0)
+var array<float> sumM  = array.new<float>(9, 0.0)
+var int dayEntries = 0
+
+// Sniper: Anchor, Ignition, Drift, Surge + Confluence track
+// Scanner: adds Tide, Slipstream, Coil, Fracture
+on = array.from(true, scanner, true, true, scanner, scanner, scanner, true, true)
+ent = array.from(f_pick(a1B,a1S), f_pick(a2B,a2S), f_pick(a3B,a3S), f_pick(a4B,a4S), f_pick(a5B,a5S), f_pick(a6B,a6S), f_pick(a7B,a7S), f_pick(a8B,a8S), false)
+exi = array.from(f_pick(x1B,x1S), f_pick(x2B,x2S), f_pick(x3B,x3S), f_pick(x4B,x4S), f_pick(x5B,x5S), f_pick(x6B,x6S), f_pick(x7B,x7S), f_pick(x8B,x8S), false)
+
+var string exWhyHold = ""
+string exWhy = ""
+names = array.from("Anchor", "Tide", "Ignition", "Drift", "Slipstream", "Coil", "Fracture", "Surge", consN == 1 ? "Any engine" : "Two agree")
+
+if newDay
+    dayEntries := 0
+
+if barstate.isconfirmed
+    for i = 0 to 8
+        // Confluence track: same-bar VOTES (v1.1) — not “already in from earlier bars”
+        if i == 8
+            votes = 0
+            alive = 0
+            for j = 0 to 7
+                if array.get(on, j) and array.get(ent, j)
+                    votes := votes + 1
+                if array.get(on, j) and array.get(stIn, j)
+                    alive := alive + 1
+            array.set(ent, 8, votes >= consN)
+            // Signal-exit for confluence: agreement broken (alive < consN). Hold-to-T1 can suppress this.
+            array.set(exi, 8, alive < consN)
+
+        if array.get(stIn, i)
+            e  = array.get(stEnt, i)
+            sp = array.get(stStp, i)
+            rm = array.get(stRem, i)
+            rl = array.get(stRe, i)
+            array.set(stMFE, i, math.max(array.get(stMFE, i), high - e))
+            bool  out = false
+            float opx = na
+            bool  wasSl = false
+            bool  booked = array.get(st1, i)
+
+            if low <= sp
+                out := true
+                opx := sp
+                wasSl := true
+                if i == dIdx
+                    exWhy := "SL"
+            else
+                if not booked and high >= e + tp1p
+                    array.set(st1, i, true)
+                    booked := true
+                    rl := rl + 0.5 * tp1p
+                    rm := rm - 0.5
+                    sp := e
+                if high >= e + tp2p
+                    rl := rl + rm * tp2p
+                    rm := 0.0
+                    out := true
+                    opx := e + tp2p
+                    if i == dIdx
+                        exWhy := "T2"
+                // Signal / EOD exits — hold-to-T1 blocks engine exits until half is banked
+                sigExit = array.get(exi, i)
+                allowSigExit = (not holdToT1) or booked
+                if not out and flatNow
+                    out := true
+                    opx := close
+                    if i == dIdx
+                        exWhy := "EOD"
+                else if not out and sigExit and allowSigExit
+                    out := true
+                    opx := close
+                    if i == dIdx
+                        exWhy := "EXIT"
+
+            if out
+                if rm > 0
+                    rl := rl + rm * (opx - e)
+                m = array.get(stMFE, i)
+                array.set(nTr, i, array.get(nTr, i) + 1)
+                array.set(sumP, i, array.get(sumP, i) + rl)
+                array.set(sumM, i, array.get(sumM, i) + m)
+                // Booked T1 only (honest) — not MFE spike on an SL bar
+                if booked
+                    array.set(nHit, i, array.get(nHit, i) + 1)
+                if m >= tp2p
+                    array.set(nHit2, i, array.get(nHit2, i) + 1)
+                if wasSl and not booked
+                    array.set(nSl, i, array.get(nSl, i) + 1)
+                if wasSl and i == dIdx
+                    lastSlTime := time
+                array.set(stIn, i, false)
+                array.set(stEnt, i, na)
+                array.set(stStp, i, na)
+                array.set(st1, i, false)
+                array.set(stRem, i, 0.0)
+                array.set(stRe, i, 0.0)
+                array.set(stMFE, i, 0.0)
+            else
+                array.set(stStp, i, sp)
+                array.set(stRem, i, rm)
+                array.set(stRe, i, rl)
+        else
+            dayCapOK = i != dIdx or dayEntries < maxDay
+            coolGate = i != dIdx or coolOK
+            if array.get(on, i) and array.get(ent, i) and allow and not flatNow and close > 0 and dayCapOK and coolGate
+                array.set(stIn, i, true)
+                array.set(stEnt, i, close)
+                array.set(stStp, i, close - slp)
+                array.set(st1, i, false)
+                array.set(stRem, i, 1.0)
+                array.set(stRe, i, 0.0)
+                array.set(stMFE, i, 0.0)
+                if i == dIdx
+                    dayEntries := dayEntries + 1
+
+dIn   = array.get(stIn, dIdx)
+dPart = array.get(st1, dIdx)
+dEnt  = array.get(stEnt, dIdx)
+dStp  = array.get(stStp, dIdx)
+dEntPrev = nz(dEnt[1], dEnt)
+dStpPrev = nz(dStp[1], dStp)
+if exWhy != ""
+    exWhyHold := exWhy
+justIn  = dIn and not dIn[1]
+justOut = not dIn and dIn[1]
+hit1 = dIn and dPart and not dPart[1]
+
+// ─────────────────────────── VISUALS ───────────────────────────
+cG  = color.new(#00c853, 0)
+cGp = color.new(#00c853, 55)
+cR  = color.new(#ff1744, 0)
+barcolor(paint ? (dIn ? (dPart ? cGp : cG) : cR) : na, title = "Strike Rate")
+
+rawFiring = (array.get(on,0) and array.get(ent,0)) or (array.get(on,1) and array.get(ent,1)) or (array.get(on,2) and array.get(ent,2)) or (array.get(on,3) and array.get(ent,3)) or (array.get(on,4) and array.get(ent,4)) or (array.get(on,5) and array.get(ent,5)) or (array.get(on,6) and array.get(ent,6)) or (array.get(on,7) and array.get(ent,7))
+earlyDot = showEarly and rawFiring and not dIn and allow and coolOK and not flatNow
+plotshape(earlyDot, title = "Early warning", style = shape.circle, location = location.belowbar, color = color.new(#fbbf24, 20), size = size.tiny)
+
+if showLbl and justIn
+    label.new(bar_index, low, showPx ? "BUY " + str.tostring(dEnt, "#.##") : "BUY", yloc = yloc.belowbar, style = label.style_label_up, color = cG, textcolor = color.white, size = size.small)
+
+if showLbl and hit1
+    label.new(bar_index, dEnt + tp1p, "T1 hit  " + str.tostring(dEnt + tp1p, "#.##"), yloc = yloc.price, style = label.style_label_down, color = #fbbf24, textcolor = color.black, size = size.tiny)
+
+if showLbl and justOut
+    exTxt = exWhyHold == "T2" ? "T2 hit  " + str.tostring(dEntPrev + tp2p, "#.##") : exWhyHold == "SL" ? "STOP  " + str.tostring(dStpPrev, "#.##") : exWhyHold == "EOD" ? "EOD  " + str.tostring(close, "#.##") : "EXIT  " + str.tostring(close, "#.##")
+    exCol = exWhyHold == "T2" ? #22d3ee : exWhyHold == "SL" ? cR : color.new(#94a3b8, 0)
+    exTc  = exWhyHold == "T2" or exWhyHold == "SL" ? color.white : color.black
+    label.new(bar_index, high, exTxt, yloc = yloc.abovebar, style = label.style_label_down, color = exCol, textcolor = exTc, size = size.small)
+
+var box zT1 = na
+var box zT2 = na
+var box zSL = na
+if showZone and justIn
+    zT1 := box.new(bar_index, dEnt + tp1p, bar_index, dEnt, border_color = color.new(#00e676, 25), border_width = 1, bgcolor = color.new(#00e676, 72))
+    zT2 := box.new(bar_index, dEnt + tp2p, bar_index, dEnt + tp1p, border_color = color.new(#00e676, 45), border_width = 1, bgcolor = color.new(#00e676, 84))
+    zSL := box.new(bar_index, dEnt, bar_index, dEnt - slp, border_color = color.new(#ff5252, 25), border_width = 1, bgcolor = color.new(#ff5252, 72))
+if showZone and dIn and not na(zT1)
+    box.set_right(zT1, bar_index + 1)
+    box.set_right(zT2, bar_index + 1)
+    box.set_right(zSL, bar_index + 1)
+
+plot(dIn ? dEnt : na, "Entry", color = color.new(color.white, 30), style = plot.style_linebr)
+plot(dIn ? dEnt + tp1p : na, "Target 1", color = color.new(#00e676, 0), style = plot.style_linebr)
+plot(dIn ? dEnt + tp2p : na, "Target 2", color = color.new(#00e676, 45), style = plot.style_linebr)
+plot(dIn ? dStp : na, "Stop", color = color.new(#ff5252, 0), style = plot.style_linebr)
+
+// ─────────────────────────── ENGINE STATS (optional · off by default) ───────────────────────────
+f_pos(s) => s == "Top left" ? position.top_left : s == "Bottom right" ? position.bottom_right : s == "Bottom left" ? position.bottom_left : position.top_right
+f_sz(s) => s == "Tiny" ? size.tiny : s == "Normal" ? size.normal : size.small
+
+var table tb = table.new(f_pos(tblPos), 4, 12, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 55))
+
+if showTbl and barstate.islast
+    hb = color.new(#101826, 0)
+    tw = color.new(color.white, 0)
+    sz = f_sz(tblSize)
+    table.cell(tb, 0, 0, "ENGINE", bgcolor = hb, text_color = tw, text_size = sz, text_halign = text.align_left)
+    table.cell(tb, 1, 0, "Trades", bgcolor = hb, text_color = tw, text_size = sz)
+    table.cell(tb, 2, 0, "T1%",   bgcolor = hb, text_color = tw, text_size = sz)
+    table.cell(tb, 3, 0, "Total", bgcolor = hb, text_color = tw, text_size = sz)
+    r = 1
+    for i = 0 to 8
+        if array.get(on, i)
+            n   = array.get(nTr, i)
+            tot = array.get(sumP, i)
+            hp  = n > 0 ? 100.0 * array.get(nHit, i) / n : 0.0
+            bg  = i == dIdx ? color.new(#1e3a5f, 15) : color.new(#0b1220, 25)
+            tc  = i == dIdx ? color.new(#93c5fd, 0) : color.new(color.white, 10)
+            hc  = hp >= 55 ? #00e676 : hp >= 45 ? #fbbf24 : #ff8a80
+            vc  = tot > 0 ? #00e676 : tot < 0 ? #ff5252 : color.gray
+            table.cell(tb, 0, r, array.get(names, i), bgcolor = bg, text_color = tc, text_size = sz, text_halign = text.align_left)
+            table.cell(tb, 1, r, str.tostring(n), bgcolor = bg, text_color = tc, text_size = sz)
+            table.cell(tb, 2, r, n > 0 ? str.tostring(hp, "#") + "%" : "—", bgcolor = bg, text_color = hc, text_size = sz)
+            table.cell(tb, 3, r, str.tostring(tot, "#.#"), bgcolor = bg, text_color = vc, text_size = sz)
+            r := r + 1
+else if barstate.islast
+    table.clear(tb, 0, 0, 3, 11)
+
+// ─────────────────────────── TRADE PANEL (entry desk) ───────────────────────────
+var table pn = table.new(position.middle_left, 2, 8, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 45))
+if showPnl and barstate.islast
+    sz2 = f_sz(tblSize)
+    // Prospective levels when flat — what you need before clicking BUY
+    ePx = dIn and not na(dEnt) ? dEnt : close
+    t1Px = ePx + tp1p
+    t2Px = ePx + tp2p
+    slPx = dIn and not na(dStp) ? dStp : ePx - slp
+    mv  = dIn and not na(dEnt) ? close - dEnt : na
+    gateOK = allow and coolOK and not flatNow
+    blockWhy = not dteOK ? "DTE" : not ivOK ? "IV" : not coolOK ? "COOL" : not syncOK ? "SYNC" : not premOK ? "PREM" : not adxOK ? "ADX" : flatNow ? "EOD" : not timeOK ? "SESSION" : ""
+    statusTxt = dIn ? (dPart ? "IN · T1 done" : "IN TRADE") : gateOK ? "READY" : ("BLOCK · " + blockWhy)
+    good = dIn ? (not na(mv) and mv >= 0) : gateOK
+    vb = dIn ? (good ? color.new(#065f46, 12) : color.new(#7f1d1d, 12)) : gateOK ? color.new(#065f46, 18) : color.new(#374151, 20)
+    vt = dIn ? (good ? #6ee7b7 : #fca5a5) : gateOK ? #6ee7b7 : #fcd34d
+    lb = color.new(#101826, 0)
+    lt = color.new(color.white, 30)
+    sideTxt = isCE ? "CALL" : "PUT"
+
+    table.cell(pn, 0, 0, "STRIKE RATE", bgcolor = lb, text_color = color.white, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 0, sideTxt, bgcolor = lb, text_color = color.new(color.white, 20), text_size = sz2)
+
+    table.cell(pn, 0, 1, "Status", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 1, statusTxt, bgcolor = vb, text_color = vt, text_size = sz2)
+
+    table.cell(pn, 0, 2, "Entry", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 2, str.tostring(ePx, "#.##") + (dIn ? "" : "  watch"), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    table.cell(pn, 0, 3, "T1 / T2", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 3, str.tostring(t1Px, "#.##") + " / " + str.tostring(t2Px, "#.##") + (dIn and dPart ? "  T1✓" : ""), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    table.cell(pn, 0, 4, "Stop", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 4, str.tostring(slPx, "#.##"), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    table.cell(pn, 0, 5, "Move", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 5, na(mv) ? "—" : ((mv >= 0 ? "+" : "") + str.tostring(mv, "#.##")), bgcolor = vb, text_color = vt, text_size = sz2)
+
+    gateBg = color.new(#0b1220, 10)
+    gateLine = "DTE " + dteTxt + " · IV " + ivTxt + " · " + (coolOK ? "Cool OK" : coolTxt)
+    table.cell(pn, 0, 6, "Gates", bgcolor = gateBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 6, gateLine, bgcolor = gateBg, text_color = gateOK ? #6ee7b7 : #fcd34d, text_size = sz2)
+
+    if showOiPanel and useOI
+        table.cell(pn, 0, 7, "OI", bgcolor = gateBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+        table.cell(pn, 1, 7, "S " + oiSupTxt + " · R " + oiResTxt, bgcolor = gateBg, text_color = color.new(color.white, 25), text_size = sz2)
+    else
+        table.cell(pn, 0, 7, "Plan", bgcolor = gateBg, text_color = lt, text_size = sz2, text_halign = text.align_left)
+        table.cell(pn, 1, 7, "T1 " + str.tostring(tp1p, "#") + " / T2 " + str.tostring(tp2p, "#") + " / SL " + str.tostring(slp, "#"), bgcolor = gateBg, text_color = color.new(color.white, 25), text_size = sz2)
+else if barstate.islast
+    table.clear(pn, 0, 0, 1, 7)
+
+// ─────────────────────────── ALERTS ───────────────────────────
+alertcondition(justIn,  "Strike Rate — BUY",  "STRIKE RATE buy {{ticker}} at {{close}}")
+alertcondition(hit1,    "Strike Rate — T1",   "STRIKE RATE target 1 hit {{ticker}}")
+alertcondition(justOut, "Strike Rate — EXIT", "STRIKE RATE exit {{ticker}} at {{close}}")
+if justIn
+    alert("STRIKE RATE buy " + syminfo.ticker + " at " + str.tostring(close, "#.##") + "  ·  T1 " + str.tostring(close + tp1p, "#.##") + "  ·  stop " + str.tostring(close - slp, "#.##"), alert.freq_once_per_bar_close)
+if justOut
+    alert("STRIKE RATE exit " + syminfo.ticker + " at " + str.tostring(close, "#.##"), alert.freq_once_per_bar_close)
