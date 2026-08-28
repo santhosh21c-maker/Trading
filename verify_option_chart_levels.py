@@ -117,10 +117,10 @@ def fetch_spot(day: date) -> dict[str, float]:
 
 
 def main() -> None:
-    print("Pre-open check: prior-day OPTION vs SPOT\n")
+    print("Pre-open check: prior-day OPTION Daily OHLC (exchange) vs chart lines\n")
     print(
-        f"{'Case':32} {'PDC':>8} {'Green':>8} {'ΔG':>6} "
-        f"{'BC':>8} {'Red':>8} {'ΔR':>6}  spotPDC"
+        f"{'Case':32} {'H':>8} {'L':>8} {'C':>8} {'BC':>8} {'Red':>8} {'ΔR':>6} "
+        f"{'Green':>8} {'ΔG':>6}"
     )
     for case in CASES:
         op = fetch_option(case["strike"], case["opt"], case["prior"])
@@ -129,19 +129,19 @@ def main() -> None:
         bc = cpr_bc(op["h"], op["l"])
         g, r = case["green"], case["red_bc"]
         print(
-            f"{case['name']:32} {pdc:8.2f} {g:8.2f} {abs(pdc-g):6.2f} "
-            f"{bc:8.2f} {r:8.2f} {abs(bc-r):6.2f}  {sp['c']:.2f}"
+            f"{case['name']:32} {op['h']:8.2f} {op['l']:8.2f} {pdc:8.2f} "
+            f"{bc:8.2f} {r:8.2f} {bc-r:6.2f} {g:8.2f} {pdc-g:6.2f}"
         )
         if "red_ext" in case:
             ext = pdc + (op["h"] - op["l"])
             print(
-                f"{'':32}   C+R={ext:.2f} vs upper red {case['red_ext']} "
+                f"{'':32}   Claim3 C+(H-L)={ext:.2f} vs upper red {case['red_ext']} "
                 f"Δ{abs(ext-case['red_ext']):.2f}"
             )
-        cam = camarilla(op["c"], op["h"], op["l"])
+        # Spot traded-low correction note for 27 Aug archive L==C auction
         print(
-            f"{'':32}   Cam CR4={cam['CR4']:.2f} CR2={cam['CR2']:.2f} "
-            f"| spot scale PP≈{(sp['h']+sp['l']+sp['c'])/3:.0f} (not premium)"
+            f"{'':32}   spot archive C={sp['c']:.2f} L={sp['l']:.2f} "
+            f"(if L==C, low may be auction; spot CPR ≠ premium lines)"
         )
         print()
 
