@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Verify TBT option-chart horizontals against prior-day OHLC only (pre-open)."""
+"""Verify pre-open option chart logic against NSE FO Daily OHLC.
+
+Locked logic (this option's previous Daily candle):
+  Green = C
+  Red   = BC = (H + L) / 2
+  Red2  = C + (H - L)   # when a second red is present
+"""
 
 from __future__ import annotations
 
@@ -11,28 +17,9 @@ except ImportError:
     derivatives_df = index_df = None
 
 
-def cpr_bc(h: float, l: float) -> float:
-    return (h + l) / 2
-
-
-def camarilla(c: float, h: float, l: float) -> dict[str, float]:
-    r = h - l
-    return {
-        "CR4": c + r * 1.1 / 2,
-        "CR3": c + r * 1.1 / 4,
-        "CR2": c + r * 1.1 / 6,
-        "CR1": c + r * 1.1 / 12,
-        "CS1": c - r * 1.1 / 12,
-        "CS2": c - r * 1.1 / 6,
-        "CS3": c - r * 1.1 / 4,
-        "CS4": c - r * 1.1 / 2,
-    }
-
-
-# Screenshot labels vs expected prior session for that contract
 CASES = [
     {
-        "name": "24150 PE (chart ~28 Aug)",
+        "name": "24150 PE",
         "strike": 24150,
         "opt": "PE",
         "prior": date(2026, 8, 27),
@@ -40,7 +27,7 @@ CASES = [
         "red_bc": 64.30,
     },
     {
-        "name": "24250 PE (chart 27 Aug open)",
+        "name": "24250 PE",
         "strike": 24250,
         "opt": "PE",
         "prior": date(2026, 8, 26),
@@ -49,7 +36,7 @@ CASES = [
         "red_ext": 116.50,
     },
     {
-        "name": "24200 PE (green~123 / red~104.7)",
+        "name": "24200 PE",
         "strike": 24200,
         "opt": "PE",
         "prior": date(2026, 8, 24),
@@ -57,7 +44,7 @@ CASES = [
         "red_bc": 104.70,
     },
     {
-        "name": "24200 CE (Px shot)",
+        "name": "24200 CE",
         "strike": 24200,
         "opt": "CE",
         "prior": date(2026, 8, 24),
@@ -69,79 +56,54 @@ CASES = [
 
 def fetch_option(strike: int, opt: str, day: date) -> dict[str, float]:
     if derivatives_df is None:
-        raise SystemExit("Install jugaad-data: pip install jugaad-data")
+        raise SystemExit("pip install jugaad-data")
     df = derivatives_df(
         symbol="NIFTY",
-        from_date=day,
+        from_date=date(2026, 8, 20),
         to_date=day,
         expiry_date=date(2026, 9, 1),
         instrument_type="OPTIDX",
         option_type=opt,
         strike_price=strike,
     )
-    if df is None or len(df) == 0:
-        # jugaad sometimes needs a range
-        df = derivatives_df(
-            symbol="NIFTY",
-            from_date=date(2026, 8, 20),
-            to_date=day,
-            expiry_date=date(2026, 9, 1),
-            instrument_type="OPTIDX",
-            option_type=opt,
-            strike_price=strike,
-        )
-        df = df[df["DATE"].astype(str).str.startswith(str(day))]
-    row = df.iloc[0]
-    return {
-        "o": float(row["OPEN"]),
-        "h": float(row["HIGH"]),
-        "l": float(row["LOW"]),
-        "c": float(row["CLOSE"]),
-    }
-
-
-def fetch_spot(day: date) -> dict[str, float]:
-    if index_df is None:
-        raise SystemExit("Install jugaad-data: pip install jugaad-data")
-    df = index_df(symbol="NIFTY 50", from_date=day, to_date=day)
-    if len(df) == 0:
-        df = index_df(symbol="NIFTY 50", from_date=date(2026, 8, 20), to_date=day)
-        df = df[df["HistoricalDate"].astype(str).str.startswith(str(day))]
-    row = df.iloc[0]
-    return {
-        "o": float(row["OPEN"]),
-        "h": float(row["HIGH"]),
-        "l": float(row["LOW"]),
-        "c": float(row["CLOSE"]),
-    }
+    for _, row in df.iterrows():
+        d = row["DATE"].date() if hasattr(row["DATE"], "date") else row["DATE"]
+        if str(d).startswith(str(day)):
+            return {
+                "o": float(row["OPEN"]),
+                "h": float(row["HIGH"]),
+                "l": float(row["LOW"]),
+                "c": float(row["CLOSE"]),
+            }
+    raise RuntimeError(f"No FO row for {strike}{opt} {day}")
 
 
 def main() -> None:
-    print("Pre-open check: prior-day OPTION Daily OHLC (exchange) vs chart lines\n")
+    print("Corrected pre-open logic: Green=C, Red=(H+L)/2, Red2=C+(H-L)\n")
     print(
-        f"{'Case':32} {'H':>8} {'L':>8} {'C':>8} {'BC':>8} {'Red':>8} {'ΔR':>6} "
-        f"{'Green':>8} {'ΔG':>6}"
+        f"{'Contract':12} {'H':>8} {'L':>8} {'C':>8} {'BC':>8} {'Red':>8} {'ΔBC':>7} "
+        f"{'Green':>8} {'ΔC':>7} {'C+R':>8}"
     )
     for case in CASES:
         op = fetch_option(case["strike"], case["opt"], case["prior"])
-        sp = fetch_spot(case["prior"])
-        pdc = op["c"]
-        bc = cpr_bc(op["h"], op["l"])
-        g, r = case["green"], case["red_bc"]
+        h, l, c = op["h"], op["l"], op["c"]
+        bc = (h + l) / 2
+        ext = c + (h - l)
         print(
-            f"{case['name']:32} {op['h']:8.2f} {op['l']:8.2f} {pdc:8.2f} "
-            f"{bc:8.2f} {r:8.2f} {bc-r:6.2f} {g:8.2f} {pdc-g:6.2f}"
+            f"{case['name']:12} {h:8.2f} {l:8.2f} {c:8.2f} {bc:8.2f} "
+            f"{case['red_bc']:8.2f} {bc-case['red_bc']:7.2f} "
+            f"{case['green']:8.2f} {c-case['green']:7.2f} {ext:8.2f}"
         )
         if "red_ext" in case:
-            ext = pdc + (op["h"] - op["l"])
             print(
-                f"{'':32}   Claim3 C+(H-L)={ext:.2f} vs upper red {case['red_ext']} "
-                f"Δ{abs(ext-case['red_ext']):.2f}"
+                f"{'':12}   upper red {case['red_ext']:.2f} vs C+(H-L)={ext:.2f} "
+                f"Δ{ext-case['red_ext']:.2f}"
             )
-        # Spot traded-low correction note for 27 Aug archive L==C auction
+        pp = (h + l + c) / 3
+        tc = 2 * pp - bc
+        top, bot = max(tc, bc), min(tc, bc)
         print(
-            f"{'':32}   spot archive C={sp['c']:.2f} L={sp['l']:.2f} "
-            f"(if L==C, low may be auction; spot CPR ≠ premium lines)"
+            f"{'':12}   CPR visual top={top:.2f} pivot={pp:.2f} bot={bot:.2f}"
         )
         print()
 
