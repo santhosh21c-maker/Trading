@@ -1,0 +1,119 @@
+//@version=5
+indicator("Option Pre-Open CPR (PDC + BC)", overlay=true, max_lines_count=64, max_labels_count=64)
+
+// Plots levels that exist BEFORE the session open, from the previous Daily
+// candle of THIS symbol (use on the option CE/PE chart).
+//
+// Confirmed vs broker TBT screenshots + NSE FO Daily:
+//   Green  = previous close C
+//   Red    = CPR BC = (H + L) / 2
+//   Red2   = C + (H - L)          (optional; matches upper red when present)
+// Also shows TC / Pivot for the full CPR band.
+
+g_show = "Display"
+showTC   = input.bool(true,  "Show CPR TC", group=g_show)
+showPP   = input.bool(true,  "Show CPR Pivot", group=g_show)
+showBC   = input.bool(true,  "Show CPR BC (red)", group=g_show)
+showPDC  = input.bool(true,  "Show Prev Close (green)", group=g_show)
+showExt  = input.bool(true,  "Show C+(H-L) extension", group=g_show)
+showPDHL = input.bool(false, "Show PDH / PDL", group=g_show)
+showRS   = input.bool(false, "Show classic R1/R2/S1/S2", group=g_show)
+
+g_style = "Style"
+extendBars = input.int(500, "Extend lines (bars)", minval=50, maxval=5000, group=g_style)
+
+dH = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_on)
+dL = request.security(syminfo.tickerid, "D", low[1],  barmerge.gaps_off, barmerge.lookahead_on)
+dC = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+pp = (dH + dL + dC) / 3.0
+bc = (dH + dL) / 2.0
+tc = 2.0 * pp - bc
+rng = dH - dL
+ext = dC + rng
+r1 = 2.0 * pp - dL
+s1 = 2.0 * pp - dH
+r2 = pp + rng
+s2 = pp - rng
+
+var line lPDC = na
+var line lBC  = na
+var line lTC  = na
+var line lPP  = na
+var line lExt = na
+var line lPDH = na
+var line lPDL = na
+var line lR1  = na
+var line lR2  = na
+var line lS1  = na
+var line lS2  = na
+
+f_set(line ln, float y, color col, string style) =>
+    if not na(ln)
+        line.set_xy1(ln, bar_index - extendBars, y)
+        line.set_xy2(ln, bar_index + 5, y)
+        line.set_color(ln, col)
+        line.set_style(ln, style)
+    ln
+
+if barstate.islast and not na(dC)
+    if showPDC
+        if na(lPDC)
+            lPDC := line.new(bar_index - extendBars, dC, bar_index + 5, dC, color=color.new(color.green, 0), width=2)
+        else
+            f_set(lPDC, dC, color.new(color.green, 0), line.style_solid)
+    if showBC
+        if na(lBC)
+            lBC := line.new(bar_index - extendBars, bc, bar_index + 5, bc, color=color.new(color.red, 0), width=2)
+        else
+            f_set(lBC, bc, color.new(color.red, 0), line.style_solid)
+    if showTC
+        if na(lTC)
+            lTC := line.new(bar_index - extendBars, tc, bar_index + 5, tc, color=color.new(color.orange, 30), width=1)
+        else
+            f_set(lTC, tc, color.new(color.orange, 30), line.style_solid)
+    if showPP
+        if na(lPP)
+            lPP := line.new(bar_index - extendBars, pp, bar_index + 5, pp, color=color.new(color.gray, 20), width=1)
+        else
+            f_set(lPP, pp, color.new(color.gray, 20), line.style_dotted)
+    if showExt
+        if na(lExt)
+            lExt := line.new(bar_index - extendBars, ext, bar_index + 5, ext, color=color.new(color.red, 40), width=1, style=line.style_dashed)
+        else
+            f_set(lExt, ext, color.new(color.red, 40), line.style_dashed)
+    if showPDHL
+        if na(lPDH)
+            lPDH := line.new(bar_index - extendBars, dH, bar_index + 5, dH, color=color.new(color.blue, 50), width=1)
+            lPDL := line.new(bar_index - extendBars, dL, bar_index + 5, dL, color=color.new(color.blue, 50), width=1)
+        else
+            f_set(lPDH, dH, color.new(color.blue, 50), line.style_dotted)
+            f_set(lPDL, dL, color.new(color.blue, 50), line.style_dotted)
+    if showRS
+        if na(lR1)
+            lR1 := line.new(bar_index - extendBars, r1, bar_index + 5, r1, color=color.new(color.purple, 40), width=1)
+            lR2 := line.new(bar_index - extendBars, r2, bar_index + 5, r2, color=color.new(color.purple, 40), width=1)
+            lS1 := line.new(bar_index - extendBars, s1, bar_index + 5, s1, color=color.new(color.purple, 40), width=1)
+            lS2 := line.new(bar_index - extendBars, s2, bar_index + 5, s2, color=color.new(color.purple, 40), width=1)
+        else
+            f_set(lR1, r1, color.new(color.purple, 40), line.style_dotted)
+            f_set(lR2, r2, color.new(color.purple, 40), line.style_dotted)
+            f_set(lS1, s1, color.new(color.purple, 40), line.style_dotted)
+            f_set(lS2, s2, color.new(color.purple, 40), line.style_dotted)
+
+var table t = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 75))
+if barstate.islast and not na(dC)
+    table.cell(t, 0, 0, "Level", text_color=color.white)
+    table.cell(t, 1, 0, "Value", text_color=color.white)
+    table.cell(t, 0, 1, "PDC (green)", text_color=color.green)
+    table.cell(t, 1, 1, str.tostring(dC, format.mintick), text_color=color.green)
+    table.cell(t, 0, 2, "BC (red)", text_color=color.red)
+    table.cell(t, 1, 2, str.tostring(bc, format.mintick), text_color=color.red)
+    table.cell(t, 0, 3, "TC", text_color=color.orange)
+    table.cell(t, 1, 3, str.tostring(tc, format.mintick), text_color=color.orange)
+    table.cell(t, 0, 4, "Pivot", text_color=color.gray)
+    table.cell(t, 1, 4, str.tostring(pp, format.mintick), text_color=color.gray)
+    table.cell(t, 0, 5, "C+(H-L)", text_color=color.red)
+    table.cell(t, 1, 5, str.tostring(ext, format.mintick), text_color=color.red)
+    table.cell(t, 0, 6, "Prior H/L", text_color=color.blue)
+    table.cell(t, 1, 6, str.tostring(dH, format.mintick) + " / " + str.tostring(dL, format.mintick), text_color=color.blue)
