@@ -1,0 +1,1712 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+//                            S T R I K E   C O R E
+//                     Two signal engines for Indian index options
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//  Apply to an OPTION chart — Nifty, Bank Nifty, FinNifty, Sensex or Bankex,
+//  CE or PE. Not to an index or futures chart: the targets are in option
+//  premium points, and the lot size is read from the option's symbol.
+//
+//  ── TWO ENGINES ──────────────────────────────────────────────────────────────
+//
+//      STRIKE RATE   the core engine. Eight internal signals; a marker prints
+//                    when the number you choose agree. An optional switch adds
+//                    one more condition: a second, faster trend read on the
+//                    index must already agree and have held it for a few bars.
+//      SR TREND      a directional ribbon with its own entries and exits.
+//
+//  Each has its own switch, so run either or both. Every entry is graded by how
+//  many engines agree at that moment — one dot or two.
+//
+//  ── TELLING THEM APART ───────────────────────────────────────────────────────
+//
+//  Each engine carries three independent identifiers, so you always know which
+//  one acted even when both fire on the same bar at almost the same price:
+//
+//      STRIKE RATE   blue    ▲ triangle   solid lines    label nearest the bar
+//      SR TREND      green   ◆ diamond    dashed lines   label above that
+//
+//  Entries, targets and the exit tag all carry the engine's colour. Both engines
+//  hold their own levels on the chart, so a second open position is never
+//  hidden behind the first.
+//
+//  A STOP IS NEVER THE ENGINE'S COLOUR, on either engine. A stop is the one
+//  line you cannot afford to misread, so it does not join the colour scheme that
+//  tells the engines apart. On every theme but Mono it is red; Mono is
+//  monochrome by design and there a stop is told apart by weight and by its tag,
+//  not by hue. Which engine a stop belongs to is carried by its line style and
+//  by the tag at its right end.
+//
+//  Labels sit in reserved lanes spaced by ATR, so two entries half a point apart
+//  cannot land on top of each other, on a 50-rupee option or an 800-rupee one.
+//
+//  ── ONE TARGET ───────────────────────────────────────────────────────────
+//
+//  Target 1 closes the whole trade. There is no partial booking, no stop that
+//  moves to your entry, and no break-even outcome. Every trade ends exactly one
+//  of four ways: the target, the stop, an opposite signal, or the bell.
+//
+//  In premium points, scaled to the instrument (the figures below are Nifty;
+//  Bank Nifty is 2.5x, Sensex 2x, and the panel always prints the ones in force):
+//
+//      TAG  +10   a mark, nothing is sold. Confirmation the trade is moving.
+//      T1   +25   the target. It closes the position in full. Trade complete.
+//      SL   -25   the stop. It never moves.
+//
+//  WHY 25 AND 25, AND WHAT ELSE IS OFFERED. A target may not be smaller than the
+//  stop it is paired with: 20 against a 25 stop has to be right 55.6% of the time
+//  merely to stand still, and you pay that handicap on every trade. Two other
+//  pairs are in the settings. Measured on 155 signals after Indian costs and
+//  0.35 points of slippage:
+//
+//      25 and 25   Rs 217 a trade   stopped cold on 25.8%   <- default
+//      20 and 25   Rs 161 a trade   stopped cold on 24.5%
+//      30 and 30   Rs 258 a trade   stopped cold on 18.1%
+//
+//  Nothing tighter is offered, because nothing tighter made money on the same
+//  sample. A tight stop does not protect you on an option; it pays the spread
+//  more often.
+//
+//  THIS REPLACED A THREE-RUNG LADDER, and the reason is worth stating plainly
+//  because it is the opposite of what most people expect. Booking a third at
+//  each of +20, +30 and +50, with the stop lifted to entry after the first,
+//  earned a fifth less than a single full exit on the same 155 signals, and
+//  bought three percentage points fewer of the stops that hurt in exchange. It
+//  also made the chart hard to read: a profitable trade whose REMAINDER
+//  scratched at entry printed a red "stop loss" label. Both problems had the
+//  same cause and both are gone.
+//
+//  (The ladder comparison is quoted as a RATIO, not in rupees, because it was
+//  measured with a different exit model from the three-pair table above — the
+//  table models the opposite-signal exit and the ladder run did not. Quoting
+//  both in rupees made two different measurements look like one, and they did
+//  not add up. The ratio is the part that is comparable.)
+//
+//  HOW FAR IT RAN AFTER YOU WERE OUT. Once the target has closed the trade, the
+//  chart keeps watching and draws a hollow mark if the move carried on to +10
+//  or +25 beyond your exit. These book nothing and change no number anywhere.
+//  They are feedback, not a mistake: the exit rule was chosen KNOWING it gives
+//  those up. Switch them off in the settings if they distract you.
+//
+//  TIME DECAY IS WHY THE TARGETS ARE WHAT THEY ARE. An option bleeds premium
+//  every day the index stands still - measured at roughly 6 points a day across
+//  ATM front-expiry contracts generally, and nearer 13 in the last week before
+//  expiry, where decay accelerates. A target that needs all day to arrive is
+//  paying that bill the whole way.
+//
+//  ── ON THE CHART ─────────────────────────────────────────────────────────
+//
+//      #n      every mark carries its trade's number — the entry, the TAG, the
+//              exit and the reach marks — so nothing is ambiguous when two
+//              engines are live at once, and an exit can always be tied back to
+//              the entry that opened it
+//      ▲       entry, with the fill price, in the engine's colour
+//      ◆ TAG   +10 reached
+//      ✓ T1    the target. The trade is closed and complete.
+//      ✕ SL    stopped out
+//      ▼ EXIT  closed by an opposite signal
+//      ▼ EOD   closed at the bell
+//      ↗ T2    after the close, the move ran on this far. Nothing was sold.
+//      ↗ T3    and this far. Also just a mark.
+//
+//  A solid, filled mark is money you made. A hollow, dashed one is a level the
+//  move reached without you, and it only ever appears on a trade that CLOSED AT
+//  ITS TARGET — a stopped-out trade is never given one.
+//
+//  The level lines appear on entry and are removed on exit, so the chart carries
+//  no lines when you are flat. The entry and exit labels, the TAG and any reach
+//  marks stay where they happened: they are the record of the day, and they are
+//  capped so they cannot crowd out a live trade's own levels.
+//
+//  ── BEFORE YOU TRADE IT ──────────────────────────────────────────────────────
+//
+//  Signals confirm on the CLOSE of a bar. An intrabar marker can still vanish.
+//
+//  Targets and stops are levels, not fills. Option premiums gap, and spreads
+//  widen exactly when you most want out — budget for a fill worse than the line.
+//
+//  No indicator is a forecast. This one states its levels in advance and marks
+//  what happened; position sizing and the decision to take a trade are yours.
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+indicator("STRIKE CORE", "CORE", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, max_bars_back = 2000)
+
+gE     = "Engines"
+useSR  = input.bool(true,  "Strike Rate", group = gE)
+useTR  = input.bool(true,  "SR Trend", group = gE)
+
+gS     = "Targets"
+gN     = "Daily limit"
+tagOn  = input.bool(true, "Mark the first move in your favour", group = gS)
+rchOn  = input.bool(true, "Show how far it ran after the exit", group = gS)
+tagP   = input.int(10, "  mark distance", minval = 3, maxval = 50, group = gS)
+capMode = input.string("Shared across engines", "Count the limit", options = ["Shared across engines", "Separately for each engine"], group = gN)
+maxDay = input.string("3", "Max entries per day", options = ["2", "3", "5", "No limit"], group = gN)
+undSym = input.symbol("NSE:NIFTY1!", "Index feed", group = gE)
+
+isBN   = str.contains(syminfo.ticker, "BANKNIFTY") or str.contains(syminfo.ticker, "BANKEX")
+isFN   = str.contains(syminfo.ticker, "FINNIFTY")
+isSX   = str.contains(syminfo.ticker, "SENSEX")
+isMC   = str.contains(syminfo.ticker, "MIDCPNIFTY")
+isNN   = str.contains(syminfo.ticker, "NIFTYNXT50")
+lotSz  = isBN ? 30 : isFN ? 60 : isSX ? 20 : isMC ? 120 : isNN ? 25 : 65
+ptSc   = isBN ? 2.5 : isSX ? 2.0 : 1.0
+
+exitAll = true
+tgtPair = input.string("25 and 25", "Target and stop", options = ["25 and 25", "20 and 25", "30 and 30"], group = gS, tooltip = "⚠ How far the trade aims, and how far it is allowed to go against you, in premium points — scaled to the index, so Bank Nifty and Sensex get proportionally wider numbers.\n\nTarget 1 CLOSES THE WHOLE TRADE. There is no partial booking and no break-even.\n\nMeasured on 155 signals, after costs and slippage:\n\n  25 and 25   Rs 217 a trade   stopped cold on 25.8%\n  20 and 25   Rs 161 a trade   stopped cold on 24.5%\n  30 and 30   Rs 258 a trade   stopped cold on 18.1%\n\n25 and 25 is the default and is the one to leave alone unless you have a reason. It is the smallest target that is not smaller than its own stop: a 20-point target against a 25-point stop has to be right 55.6% of the time just to break even, and you pay that handicap on every trade.\n\n30 and 30 earned the most and was stopped least, because a 25-point stop sits inside the contract's own noise more often than a 30 does. It also risks Rs 1,950 a lot instead of Rs 1,625, and the difference from 25/25 is inside the error bars on this sample. Pick it for fewer stop-outs, not because it is proven better.\n\nWhat is NOT here, deliberately: any target under 20 and any stop under 20. Every one of them lost money on the same sample. A tight stop does not protect you on an option; it just pays the spread more often.")
+tp1p   = math.round(ptSc * (tgtPair == "20 and 25" ? 20.0 : tgtPair == "30 and 30" ? 30.0 : 25.0))
+tp2p   = tp1p + math.round(ptSc * 10.0)
+tp3p   = tp1p + math.round(ptSc * 25.0)
+tagPts = math.round(ptSc * tagP)
+slp    = math.round(ptSc * (tgtPair == "30 and 30" ? 30.0 : 25.0))
+
+g1       = "Strike Rate"
+mode     = input.string("Sniper", "Mode", options = ["Sniper", "Scanner"], group = g1)
+chartSig = input.string("Any two must agree", "Chart signals from", options = ["Any two must agree", "Any one may print"], group = g1)
+tfMode   = input.string("Follow the chart", "Chart timeframe", options = ["Follow the chart", "1 minute", "3 minute", "5 minute"], group = g1)
+
+tfRaw    = timeframe.isminutes ? timeframe.multiplier : timeframe.isseconds ? 0 : 999
+tfAuto   = tfMode == "Follow the chart"
+tfPick   = tfRaw <= 2 ? 1 : tfRaw <= 4 ? 3 : 5
+tf1      = tfAuto ? tfPick == 1 : tfMode == "1 minute"
+tf3      = tfAuto ? tfPick == 3 : tfMode == "3 minute"
+tfExact  = tfRaw == 1 or tfRaw == 3 or tfRaw == 5
+sigUseTF = tf1 ? "1" : tf3 ? "3" : "5"
+
+L_ATR  = tf1 ?  70 : tf3 ? 23 : 14
+L_EMAF = tf1 ?  45 : tf3 ? 15 :  9
+L_EMAM = tf1 ? 105 : tf3 ? 35 : 21
+L_EMAS = tf1 ? 250 : tf3 ? 83 : 50
+L_SLOPE= tf1 ?  15 : tf3 ?  5 :  3
+L_FRESH= tf1 ?  15 : tf3 ?  5 :  3
+L_BAND = tf1 ? 100 : tf3 ? 33 : 20
+L_PIV  = tf1 ?  25 : tf3 ?  8 :  5
+L_CONF = tf1 ? 100 : tf3 ? 33 : 20
+L_HOLD = tf1 ?  30 : tf3 ? 10 :  6
+L_STF  = tf1 ?  35 : tf3 ? 12 :  7
+L_STS  = tf1 ?  50 : tf3 ? 17 : 10
+
+tfWant = tf1 ? 1 : tf3 ? 3 : 5
+tfHave = timeframe.in_seconds() / 60.0
+tfOK   = tfAuto ? tfExact : tfWant == tfHave
+tfSay  = tfAuto and tfExact ? str.tostring(tfWant) + " min  ·  auto" : tfAuto ? str.tostring(tfHave, "#.##") + " min  ·  using " + str.tostring(tfWant) + " min lengths" : tfOK ? tfMode + "  ·  pinned" : "PINNED " + tfMode + " ON A " + str.tostring(tfHave, "#.##") + " MIN CHART"
+
+useConfirm = input.bool(false, "Confirm with trend before entry", group = g1)
+
+g2      = "SR Trend"
+trSpeed = input.string("Balanced", "Ribbon speed", options = ["Scalp", "Balanced", "Swing"], group = g2)
+trTF    = input.timeframe("", "Ribbon timeframe", options = ["", "1", "3", "5", "15", "30", "60"], group = g2)
+
+int   trHold  = tf1 ? 10 : tf3 ?  3 :  2
+bool  trChop  = true
+float trChopN = tf1 ? 0.067 : tf3 ? 0.117 : 0.15
+int   trGap   = tf1 ? 15 : tf3 ?  5 :  3
+float trStX   = 2.0
+bool  trMark  = true
+int   trMarkLen = 4
+
+gD       = "Display"
+showPnl  = input.bool(true, "Live panel", group = gD)
+markOnly = input.bool(false, "Markers only — hide the band, the tint and the boxes", group = gD, tooltip = "⚠ A DISPLAY SWITCH ONLY. It changes nothing about how the indicator trades: the same entries fire at the same prices, the same targets and stops apply, and the alerts are identical. It only stops three things being painted over your candles.\n\nOFF (default)  the SR Trend band, the green wash while a trade is live, and the reward and risk boxes are all drawn.\nON             none of them are. You keep the entry markers, the target and TAG marks, the exit labels, the hollow reach marks and the panel.\n\nOnly the BAND belongs to SR Trend. The wash and the boxes appear whichever engine is holding, which is why this is one common switch rather than a control under each engine.\n\nOn a 1-minute option chart all three are drawn in premium points, and premium moves several percent a bar — so the band is often taller than the candles and the boxes can cover half the screen. If the chart is hard to read, this is the switch.\n\nThe Trend cloud setting below still works; this overrides it while it is on.")
+showBoxIn = input.bool(true, "Position box", group = gD)
+showStk  = input.bool(true, "Strike check", group = gD)
+ribMode  = input.string("Light", "Trend cloud", options = ["Full", "Light", "Line only", "Off"], group = gD)
+showBox = showBoxIn and not markOnly
+bool trRib   = ribMode != "Off" and not markOnly
+bool ribGlow = ribMode == "Full" and not markOnly
+bool ribFill = (ribMode == "Full" or ribMode == "Light") and not markOnly
+bool paint = false
+theme    = input.string("Neon", "Theme", options = ["Neon", "Classic", "Mono", "High contrast"], group = gD)
+mStyle   = input.string("Symbols", "Marker style", options = ["Symbols", "Text", "Minimal"], group = gD)
+useStale = input.bool(false, "Stale-trade warning", group = gD)
+
+staleN   = tf1 ? 150 : tf3 ? 50 : 30
+
+showDay  = input.bool(true, "Session divider", group = gD)
+showDiag = input.bool(false, "Signal diagnostics", group = gD)
+bool tint  = not markOnly
+
+bool showLbl = true
+
+colUp = theme == "Classic" ? #26a69a : theme == "Mono" ? #d4d4d8 : theme == "High contrast" ? #00ff5f : #00ffaa
+colDn = theme == "Classic" ? #ef5350 : theme == "Mono" ? #71717a : theme == "High contrast" ? #ff1744 : #ff2b47
+colFl = theme == "Mono" ? #52525b : #7f8b9e
+colTag = theme == "Mono" ? #d4d4d8 : theme == "High contrast" ? #ea80fc : #e879f9
+colT1  = theme == "Mono" ? #a1a1aa : theme == "High contrast" ? #e040fb : #d946ef
+colT2  = theme == "Mono" ? #71717a : theme == "High contrast" ? #d500f9 : #c026d3
+colT3  = theme == "Mono" ? #52525b : theme == "High contrast" ? #aa00ff : #a21caf
+colNu  = theme == "Mono" ? #3f3f46 : theme == "High contrast" ? #78909c : #52525b
+
+cG  = colUp
+cR  = colDn
+
+f_chan(float v) => v <= 0.03928 ? v / 12.92 : math.pow((v + 0.055) / 1.055, 2.4)
+f_ink(color c) =>
+    float L = 0.2126 * f_chan(color.r(c) / 255.0) + 0.7152 * f_chan(color.g(c) / 255.0) + 0.0722 * f_chan(color.b(c) / 255.0)
+    L > 0.1791 ? color.black : color.white
+
+cSR = theme == "Mono" ? #e4e4e7 : theme == "High contrast" ? #00b0ff : #3d8bff
+cTR = theme == "Mono" ? #a1a1aa : theme == "High contrast" ? #00c853 : #059669
+
+cSTOP = colDn
+
+tkr  = str.upper(syminfo.ticker)
+aCE  = str.endswith(tkr, "CE") or not na(str.match(tkr, "[0-9]C[0-9]+$")) or str.contains(tkr, "CALL")
+aPE  = str.endswith(tkr, "PE") or not na(str.match(tkr, "[0-9]P[0-9]+$")) or str.contains(tkr, "PUT")
+isCE   = aCE ? true : aPE ? false : true
+okType = aCE or aPE
+
+newDay = ta.change(time("D")) != 0
+
+[uO, uH, uL, uC, uV] = request.security(undSym, sigUseTF, [open, high, low, close, volume], barmerge.gaps_off, barmerge.lookahead_off)
+
+uChart = request.security(undSym, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+dlN    = 60
+dlK    = 10
+dU     = uChart - nz(uChart[dlK], uChart)
+dP     = close  - nz(close[dlK],  close)
+dlSX   = math.sum(dU, dlN)
+dlSY   = math.sum(dP, dlN)
+dlSXX  = math.sum(dU * dU, dlN)
+dlSXY  = math.sum(dU * dP, dlN)
+dlDen  = dlN * dlSXX - dlSX * dlSX
+dlRaw  = dlDen != 0 ? (dlN * dlSXY - dlSX * dlSY) / dlDen : na
+dlEff  = dlRaw * (isCE ? 1.0 : -1.0)
+dlTrav = math.sum(math.abs(dU), dlN)
+dlOK   = bar_index >= dlN + dlK and not na(dlRaw) and dlTrav > 0 and dlEff > 0.02 and dlEff < 1.5
+dO = uO
+dH = uH
+dL = uL
+dC = uC
+dV = nz(uV) <= 0 ? nz(volume) : uV
+
+dTR  = math.max(dH - dL, math.max(math.abs(dH - nz(dC[1], dC)), math.abs(dL - nz(dC[1], dC))))
+dAtr = ta.rma(dTR, L_ATR)
+[pdH, pdL, pdC] = request.security(undSym, "D", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
+
+var float cPV = 0.0
+var float cV  = 0.0
+dTyp = (dH + dL + dC) / 3
+if newDay
+    cPV := 0.0
+    cV  := 0.0
+cPV := cPV + nz(dTyp * dV)
+cV  := cV + nz(dV)
+refA = cV > 0 ? cPV / cV : dC
+
+pP  = (pdH + pdL + pdC) / 3
+pB0 = (pdH + pdL) / 2
+pT0 = 2 * pP - pB0
+pTC = math.max(pT0, pB0)
+pBC = math.min(pT0, pB0)
+pR1 = 2 * pP - pdL
+pS1 = 2 * pP - pdH
+
+f_conf(int len, float mult) =>
+    b  = ta.sma(close, len)
+    bd = ta.atr(len) * mult
+    up = b + bd
+    dn = b - bd
+    var int d = 0
+    if close > up
+        d := 1
+    else if close < dn
+        d := -1
+    fu   = d ==  1 and nz(d[1], 0) !=  1
+    fd   = d == -1 and nz(d[1], 0) != -1
+    held = nz(ta.barssince(fu or fd), 9999)
+    [d, held]
+[cDir, cHeld] = request.security(undSym, sigUseTF, f_conf(L_CONF, 1.2), barmerge.gaps_off, barmerge.lookahead_off)
+confOK = not useConfirm or (cDir == (isCE ? 1 : -1) and cHeld >= L_HOLD)
+
+scanner = mode == "Scanner"
+consN   = chartSig == "Any two must agree" ? 2 : 1
+dIdx    = 8
+
+var int   dayStart = na
+var float orH = na
+var float orL = na
+var bool  orUp = false
+var bool  orDn = false
+if newDay
+    dayStart := time
+    orH      := dH
+    orL      := dL
+    orUp     := false
+    orDn     := false
+minsIn = na(dayStart) ? 0.0 : (time - dayStart) / 60000.0
+inOR   = minsIn < 30
+if inOR and not newDay
+    orH := math.max(nz(orH, dH), dH)
+    orL := math.min(nz(orL, dL), dL)
+orDone = not inOR and not na(orH)
+if orDone and dC > orH
+    orUp := true
+if orDone and dC < orL
+    orDn := true
+
+f_ax(h, l, c, fac, len) =>
+    tr  = math.max(h - l, math.max(math.abs(h - nz(c[1], c)), math.abs(l - nz(c[1], c))))
+    atr = ta.rma(tr, len)
+    mid = (h + l) / 2
+    ub  = mid + fac * atr
+    lb  = mid - fac * atr
+    var float fu = 0.0
+    var float fl = 0.0
+    var int   d  = 1
+    fu := (ub < nz(fu[1], ub) or nz(c[1], c) > nz(fu[1], ub)) ? ub : nz(fu[1], ub)
+    fl := (lb > nz(fl[1], lb) or nz(c[1], c) < nz(fl[1], lb)) ? lb : nz(fl[1], lb)
+    d  := c > nz(fu[1], ub) ? 1 : c < nz(fl[1], lb) ? -1 : nz(d[1], 1)
+    [d == 1 ? fl : fu, d]
+[sfL, dirF] = f_ax(dH, dL, dC, 1.5, L_STF)
+[ssL, dirS] = f_ax(dH, dL, dC, 3.0, L_STS)
+
+e9  = ta.ema(dC, L_EMAF)
+e21 = ta.ema(dC, L_EMAM)
+e50 = ta.ema(dC, L_EMAS)
+slUp = (e50 - e50[L_SLOPE]) > 0
+slDn = (e50 - e50[L_SLOPE]) < 0
+xUp = ta.crossover(e9, e21)
+xDn = ta.crossunder(e9, e21)
+sXU = ta.barssince(xUp)
+sXD = ta.barssince(xDn)
+
+bbD = 2.0 * ta.stdev(dC, L_BAND)
+kcR = ta.rma(dTR, L_BAND) * 1.5
+sqz = bbD < kcR
+fire = not sqz and sqz[1]
+ref  = math.avg(math.avg(ta.highest(dH, L_BAND), ta.lowest(dL, L_BAND)), ta.sma(dC, L_BAND))
+mom  = ta.linreg(dC - ref, L_BAND, 0)
+sF   = ta.barssince(fire)
+
+phv = ta.pivothigh(dH, L_PIV, L_PIV)
+plv = ta.pivotlow(dL, L_PIV, L_PIV)
+var float lPH = na
+var float lPL = na
+if not na(phv)
+    lPH := phv
+if not na(plv)
+    lPL := plv
+var float bUp = na
+var float bDn = na
+
+vS  = ta.sma(dV, L_BAND)
+wid = (dH - dL) > 1.2 * dAtr
+tTh = (dH - dL) > 0 and (dC - dL) > 0.66 * (dH - dL)
+bTh = (dH - dL) > 0 and (dH - dC) > 0.66 * (dH - dL)
+
+xoTC = ta.crossover(dC, pTC)
+xoR1 = ta.crossover(dC, pR1)
+xoP  = ta.crossover(dC, pP)
+xuBC = ta.crossunder(dC, pBC)
+xuS1 = ta.crossunder(dC, pS1)
+xuP  = ta.crossunder(dC, pP)
+xoVW = ta.crossover(dC, refA)
+xuVW = ta.crossunder(dC, refA)
+xoPH = ta.crossover(dC, lPH)
+xuPL = ta.crossunder(dC, lPL)
+
+a1B = xoTC or xoR1 or (dL <= pS1 and dC > pS1 and dC > dO)
+a1S = xuBC or xuS1 or (dH >= pR1 and dC < pR1 and dC < dO)
+x1B = xuBC or xuP
+x1S = xoTC or xoP
+
+a2B = xoVW and dC > dO and (dC - refA) >= 0.30 * dAtr
+a2S = xuVW and dC < dO and (refA - dC) >= 0.30 * dAtr
+x2B = xuVW
+x2S = xoVW
+
+a3B = orUp[1] and dL <= orH and dC > orH and dC > dO
+a3S = orDn[1] and dH >= orL and dC < orL and dC < dO
+oM  = (nz(orH) + nz(orL)) / 2
+x3B = dC < orH and dC < oM
+x3S = dC > orL and dC > oM
+
+a4B = dirF == 1 and dirS == 1 and (dirF[1] != 1 or dirS[1] != 1)
+a4S = dirF == -1 and dirS == -1 and (dirF[1] != -1 or dirS[1] != -1)
+x4B = dirF == -1
+x4S = dirF == 1
+
+a5B = not na(sXU) and sXU <= L_FRESH and e21 > e50 and slUp
+a5S = not na(sXD) and sXD <= L_FRESH and e21 < e50 and slDn
+x5B = xDn
+x5S = xUp
+
+a6B = not na(sF) and sF <= L_FRESH and mom > 0 and mom > mom[1]
+a6S = not na(sF) and sF <= L_FRESH and mom < 0 and mom < mom[1]
+x6B = mom < 0 or (mom < mom[1] and mom[1] < mom[2])
+x6S = mom > 0 or (mom > mom[1] and mom[1] > mom[2])
+
+a7B = not na(lPH) and xoPH
+a7S = not na(lPL) and xuPL
+if a7B
+    bUp := lPH
+if a7S
+    bDn := lPL
+x7B = not na(bUp) and dC < bUp
+x7S = not na(bDn) and dC > bDn
+
+a8B = dV > 2.0 * vS and wid and tTh and dC > dO
+a8S = dV > 2.0 * vS and wid and bTh and dC < dO
+x8B = xDn or (dV > 2.0 * vS and bTh and dC < dO)
+x8S = xUp or (dV > 2.0 * vS and tTh and dC > dO)
+
+f_pick(b, s) => isCE ? b : s
+premOK = close > close[1]
+
+inSes  = not na(time(timeframe.period, "0920-1445", "Asia/Kolkata"))
+inMute = not na(time(timeframe.period, "1215-1315", "Asia/Kolkata"))
+inFlat = not na(time(timeframe.period, "1510-1520", "Asia/Kolkata"))
+timeOK = inSes and not inMute
+corr   = ta.correlation(close, uC, L_BAND)
+sgn    = isCE ? 1.0 : -1.0
+syncOK = nz(corr) * sgn >= 0.30
+var int dayTrade = 0
+var int srNo = 0
+var int trNo = 0
+f_no(int n) => "#" + str.tostring(n) + " "
+var int dayOpens = 0
+if newDay
+    dayOpens := 0
+    dayTrade := 0
+maxN   = maxDay == "2" ? 2 : maxDay == "3" ? 3 : maxDay == "5" ? 5 : 999999
+capShared = capMode == "Shared across engines"
+var int srDay = 0
+var int trDay = 0
+if newDay
+    srDay := 0
+    trDay := 0
+f_cap(int used) => capShared ? dayOpens < maxN : used < maxN
+capOK  = f_cap(srDay)
+
+sigBarNew = ta.change(time(sigUseTF)) != 0
+sigSame   = timeframe.in_seconds(sigUseTF) <= timeframe.in_seconds()
+sigFresh  = sigSame or sigBarNew
+allow  = timeOK and syncOK and premOK and sigFresh and capOK
+flatNow = inFlat
+
+var array<bool>  stIn  = array.new<bool>(9, false)
+var array<float> stEnt = array.new<float>(9, na)
+var array<float> stStp = array.new<float>(9, na)
+var array<bool>  st1   = array.new<bool>(9, false)
+var array<float> stRem = array.new<float>(9, 0.0)
+var array<float> stRe  = array.new<float>(9, 0.0)
+var array<float> stMFE = array.new<float>(9, 0.0)
+
+on  = array.from(true, scanner, true, true, scanner, scanner, scanner, true, true)
+ent = array.from(f_pick(a1B,a1S), f_pick(a2B,a2S), f_pick(a3B,a3S), f_pick(a4B,a4S), f_pick(a5B,a5S), f_pick(a6B,a6S), f_pick(a7B,a7S), f_pick(a8B,a8S), false)
+exi = array.from(f_pick(x1B,x1S), f_pick(x2B,x2S), f_pick(x3B,x3S), f_pick(x4B,x4S), f_pick(x5B,x5S), f_pick(x6B,x6S), f_pick(x7B,x7S), f_pick(x8B,x8S), false)
+
+var string exWhyHold = ""
+var int    exStgHold = 0
+var float exPnl = na
+string exWhy = ""
+int    exStg = 0
+var bool cnfPrev  = false
+var bool confHeld = false
+names = array.from("Anchor", "Tide", "Ignition", "Drift", "Slipstream", "Coil", "Fracture", "Surge", consN == 1 ? "Any engine" : "Confluence")
+
+if (useSR or array.get(stIn, dIdx)) and barstate.isconfirmed
+    for i = 0 to 8
+        if i == 8
+            ac = 0
+            for j = 0 to 7
+                if array.get(on, j) and array.get(stIn, j)
+                    ac := ac + 1
+            cnfNow = ac >= consN
+            if cnfNow and not cnfPrev
+                confHeld := confOK
+            if not cnfNow
+                confHeld := false
+            cnfPrev := cnfNow
+            array.set(ent, 8, cnfNow and (not useConfirm or confHeld))
+            array.set(exi, 8, ac == 0)
+
+        if array.get(stIn, i)
+            e  = array.get(stEnt, i)
+            sp = array.get(stStp, i)
+            rm = array.get(stRem, i)
+            rl = array.get(stRe, i)
+            array.set(stMFE, i, math.max(array.get(stMFE, i), high - e))
+            bool  out = false
+            float opx = na
+
+            if low <= sp
+                out := true
+                opx := sp
+                if i == dIdx
+                    exWhy := "SL"
+                    exStg := 0
+            else
+                if not array.get(st1, i) and high >= e + tp1p
+                    array.set(st1, i, true)
+                    rl  := rl + rm * tp1p
+                    rm  := 0.0
+                    out := true
+                    opx := e + tp1p
+                    if i == dIdx
+                        exWhy := "T1"
+                        exStg := 1
+                if not out and (array.get(exi, i) or flatNow)
+                    out := true
+                    opx := close
+                    if i == dIdx
+                        exWhy := flatNow ? "EOD" : "EXIT"
+                        exStg := 0
+
+            if out
+                if rm > 0
+                    rl := rl + rm * (opx - e)
+                if i == dIdx
+                    exPnl := rl
+                m = array.get(stMFE, i)
+                array.set(stIn, i, false)
+                array.set(stEnt, i, na)
+                array.set(stStp, i, na)
+                array.set(st1, i, false)
+                array.set(stRem, i, 0.0)
+                array.set(stRe, i, 0.0)
+                array.set(stMFE, i, 0.0)
+            else
+                array.set(stStp, i, sp)
+                array.set(stRem, i, rm)
+                array.set(stRe, i, rl)
+        else
+            if useSR and array.get(on, i) and array.get(ent, i) and allow and not flatNow and close > 0
+                array.set(stIn, i, true)
+                array.set(stEnt, i, close)
+                array.set(stStp, i, math.max(close - slp, syminfo.mintick))
+                array.set(st1, i, false)
+                array.set(stRem, i, 1.0)
+                array.set(stRe, i, 0.0)
+                array.set(stMFE, i, 0.0)
+
+dIn   = array.get(stIn, dIdx)
+dEnt  = array.get(stEnt, dIdx)
+dStp  = array.get(stStp, dIdx)
+dEntPrev = nz(dEnt[1], dEnt)
+dStpPrev = nz(dStp[1], dStp)
+if exWhy != ""
+    exWhyHold := exWhy
+    exStgHold := exStg
+srIn  = dIn
+justIn  = srIn and not srIn[1]
+if justIn and barstate.isconfirmed
+    dayOpens := dayOpens + 1
+    srDay := srDay + 1
+    dayTrade := dayTrade + 1
+    srNo := dayTrade
+justOut = not srIn and srIn[1]
+
+int   trLen  = trSpeed == "Scalp" ? (tf1 ? 100 : tf3 ? 33 : 20) : trSpeed == "Swing" ? (tf1 ? 275 : tf3 ? 92 : 55) : (tf1 ? 170 : tf3 ? 57 : 34)
+float trMult = trSpeed == "Scalp" ? 1.2 : trSpeed == "Swing" ? 2.2 : 1.6
+
+f_bx(int len, float mult, float stx, int hold, bool chop, float chopN, int erLen, int atrLen) =>
+    b  = ta.vwma(close, len)
+    bd = ta.atr(len) * mult
+    up = b + bd
+    dn = b - bd
+    var int d = 0
+    if close > up
+        d := 1
+    else if close < dn
+        d := -1
+    fu   = d ==  1 and nz(d[1], 0) !=  1
+    fd   = d == -1 and nz(d[1], 0) != -1
+    held = nz(ta.barssince(fu or fd), 9999)
+    [stLine, stDir] = ta.supertrend(stx, atrLen)
+    net  = math.abs(close - nz(close[erLen], close))
+    path = math.sum(math.abs(close - nz(close[1], close)), erLen)
+    er   = path > 0 ? net / path : 0.0
+    ok   = not chop or er >= chopN
+    cu   = d ==  1 and held == hold and stDir < 0 and ok
+    cd   = d == -1 and held == hold and stDir > 0 and ok
+    [b, up, dn, d, cu, cd, er]
+
+var bool  trPos  = false
+var float trEnt  = na
+var float trStop = na
+var int   trStg  = 0
+trUseTF = trTF == "" ? timeframe.period : trTF
+[bsA, bsU, bsD, trDir, trRawU, trRawD, trER] = request.security(syminfo.tickerid, trUseTF, f_bx(trLen, trMult, trStX, trHold, trChop, trChopN, L_BAND, L_ATR), barmerge.gaps_off, barmerge.lookahead_off)
+
+var int trLastSig = na
+trGapOK = na(trLastSig) or (bar_index - trLastSig) >= trGap
+
+trAllow = timeOK and syncOK and premOK and sigFresh and f_cap(trDay)
+trSigU  = useTR and not trPos and trRawU and trGapOK and trAllow and not flatNow and barstate.isconfirmed
+trSigD  = trRawD and barstate.isconfirmed
+if trSigU or trSigD
+    trLastSig := bar_index
+
+var int   trWin  = 0
+var int   trLoss = 0
+var float trNet2 = 0.0
+bool trOpen = false
+bool trStopHit = false
+bool trExit = false
+float trOut = na
+
+if (useTR or trPos) and barstate.isconfirmed
+    if not trPos
+        if trSigU
+            trPos  := true
+            trEnt  := close
+            trStop := math.max(close - slp, syminfo.mintick)
+            trStg  := 0
+            trOpen := true
+            dayOpens := dayOpens + 1
+            trDay := trDay + 1
+            dayTrade := dayTrade + 1
+            trNo   := dayTrade
+    else
+        if low <= trStop
+            trStopHit := true
+            trExit := true
+            trPos  := false
+            trOut  := trStop
+            trLoss := trLoss + 1
+            trNet2 := trNet2 + (trStop - trEnt)
+        else
+            if trStg < 1 and high >= trEnt + tp1p
+                trStg := 1
+                trExit := true
+                trPos  := false
+                trOut  := trEnt + tp1p
+                trWin  := trWin + 1
+                trNet2 := trNet2 + tp1p
+            if trPos and trSigD
+                trExit := true
+                trPos  := false
+                trOut  := close
+                trNet2 := trNet2 + (close - trEnt)
+                if close > trEnt
+                    trWin := trWin + 1
+                else
+                    trLoss := trLoss + 1
+            if trPos and flatNow
+                trExit := true
+                trPos  := false
+                trOut  := close
+                trNet2 := trNet2 + (close - trEnt)
+                if close > trEnt
+                    trWin := trWin + 1
+                else
+                    trLoss := trLoss + 1
+
+bsC = trDir == 1 ? colUp : trDir == -1 ? colDn : colFl
+
+agree = (srIn ? 1 : 0) + (trPos ? 1 : 0)
+dots = (agree >= 1 ? "●" : "○") + (agree >= 2 ? "●" : "○")
+
+plot(useTR and ribGlow ? bsA : na, "Ribbon bloom", color.new(bsC, 80), 11, display = display.pane)
+plot(useTR and ribGlow ? bsA : na, "Ribbon inner", color.new(bsC, 42), 5,  display = display.pane)
+pB  = plot(useTR and trRib ? bsA : na, "Ribbon", bsC, 2, display = display.pane)
+pU  = plot(useTR and ribFill ? bsU : na, "Upper", color.new(bsC, ribGlow ? 88 : 94), 1, display = display.pane)
+pD  = plot(useTR and ribFill ? bsD : na, "Lower", color.new(bsC, ribGlow ? 88 : 94), 1, display = display.pane)
+bsP = nz(bsU - bsA) > 0 ? math.min(math.abs(close - bsA) / (bsU - bsA), 1.0) : 0.0
+ribBase  = ribGlow ? 88 : 96
+ribSwing = ribGlow ? 33.0 : 6.0
+bsT = int(ribBase - ribSwing * bsP)
+fill(pU, pB, useTR and ribFill ? color.new(bsC, bsT) : na, "Upper fill")
+fill(pD, pB, useTR and ribFill ? color.new(bsC, bsT) : na, "Lower fill")
+
+var int rawA = 0
+var int takA = 0
+var int rawB = 0
+var int takB = 0
+if barstate.isconfirmed
+    if array.get(ent, 8)
+        rawA := rawA + 1
+    if justIn
+        takA := takA + 1
+    if trRawU
+        rawB := rawB + 1
+    if trOpen
+        takB := takB + 1
+
+var int   dayN   = 0
+var int   dayT1  = 0
+var int   daySL  = 0
+var float dayPts = 0.0
+if newDay
+    dayN     := 0
+    dayT1    := 0
+    daySL    := 0
+    dayPts   := 0.0
+
+sbOpen = justIn or trOpen
+srClosed = justOut
+srPnl    = nz(exPnl, 0.0)
+
+trPnl = trExit ? nz(trOut, close) - trEnt : 0.0
+otherPnl = trPnl
+tradePnl = (srClosed ? srPnl : 0.0) + otherPnl
+if barstate.isconfirmed
+    if justIn
+        dayN := dayN + 1
+    if trOpen
+        dayN := dayN + 1
+    if srClosed
+        dayPts := dayPts + srPnl
+        if exStgHold >= 1
+            dayT1 := dayT1 + 1
+        else if exWhyHold == "SL"
+            daySL := daySL + 1
+    if trExit
+        dayPts := dayPts + trPnl
+        if trStg >= 1
+            dayT1 := dayT1 + 1
+        else if trStopHit
+            daySL := daySL + 1
+
+anyPos = srIn or trPos
+priEnt = srIn ? dEnt : trEnt
+priStp = srIn ? dStp : trStop
+priT1  = na(priEnt) ? na : priEnt + tp1p
+bxTop  = exitAll ? tp1p : tp3p
+priT2  = na(priEnt) ? na : priEnt + bxTop
+
+var int  posBar   = na
+var bool staleFired = false
+if anyPos and not anyPos[1]
+    posBar := bar_index
+    staleFired := false
+if not anyPos
+    posBar := na
+    staleFired := false
+preT1  = anyPos and not na(priEnt) and not na(priStp) and priStp < priEnt
+staleAge = anyPos and not na(posBar) ? bar_index - posBar : 0
+staleNow = useStale and anyPos and preT1 and staleAge >= staleN and not staleFired and barstate.isconfirmed
+if staleNow
+    staleFired := true
+
+var array<line>  lnE  = array.new<line>(2, na)
+var array<line>  lnT1 = array.new<line>(2, na)
+var array<line>  lnS  = array.new<line>(2, na)
+var array<label> tgT1 = array.new<label>(2, na)
+var array<label> tgS  = array.new<label>(2, na)
+var array<bool>  wasIn = array.new<bool>(2, false)
+
+engCol  = array.from(cSR, cTR)
+engSty  = array.from(line.style_solid, line.style_dashed)
+engWid  = array.from(2, 2)
+engTag  = array.from("SR", "TR")
+engIn   = array.from(srIn, trPos)
+engEnt  = array.from(dEnt, trEnt)
+engStp  = array.from(dStp, trStop)
+
+for e = 0 to 1
+    held = array.get(engIn, e)
+    ent  = array.get(engEnt, e)
+    stp  = array.get(engStp, e)
+    col  = array.get(engCol, e)
+    sty  = array.get(engSty, e)
+    wid  = array.get(engWid, e)
+    if held and not na(ent)
+        if not array.get(wasIn, e)
+            line.delete(array.get(lnE,  e))
+            line.delete(array.get(lnT1, e))
+            line.delete(array.get(lnS,  e))
+            label.delete(array.get(tgT1, e))
+            label.delete(array.get(tgS,  e))
+            array.set(lnE,  e, line.new(bar_index, ent, bar_index + 1, ent, xloc = xloc.bar_index, color = color.new(col, 45), width = 1, style = sty))
+            array.set(lnT1, e, line.new(bar_index, ent + tp1p, bar_index + 1, ent + tp1p, xloc = xloc.bar_index, color = col, width = wid, style = sty))
+            array.set(lnS,  e, line.new(bar_index, stp, bar_index + 1, stp, xloc = xloc.bar_index, color = cSTOP, width = wid, style = sty))
+            array.set(tgT1, e, label.new(bar_index + 1, ent + tp1p, "T1·" + array.get(engTag, e), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(col, 80), textcolor = col, size = size.tiny))
+            array.set(tgS,  e, label.new(bar_index + 1, stp, "SL·" + array.get(engTag, e), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(cSTOP, 80), textcolor = cSTOP, size = size.tiny))
+        else
+            line.set_x2(array.get(lnE,  e), bar_index + 1)
+            line.set_x2(array.get(lnT1, e), bar_index + 1)
+            line.set_x2(array.get(lnS,  e), bar_index + 1)
+            line.set_y1(array.get(lnS,  e), stp)
+            line.set_y2(array.get(lnS,  e), stp)
+            label.set_x(array.get(tgT1, e), bar_index + 1)
+            label.set_x(array.get(tgS,  e), bar_index + 1)
+            label.set_y(array.get(tgS,  e), stp)
+    else
+        if array.get(wasIn, e)
+            line.delete(array.get(lnE,  e))
+            line.delete(array.get(lnT1, e))
+            line.delete(array.get(lnS,  e))
+            label.delete(array.get(tgT1, e))
+            label.delete(array.get(tgS,  e))
+            array.set(lnE,  e, na)
+            array.set(lnT1, e, na)
+            array.set(lnS,  e, na)
+            array.set(tgT1, e, na)
+            array.set(tgS,  e, na)
+    array.set(wasIn, e, held and not na(ent))
+
+plotshape(justIn ? low : na, "Entry · Strike Rate", shape.triangleup, location.belowbar, cSR, size = size.tiny)
+plotshape(trOpen ? low : na, "Entry · SR Trend",    shape.diamond,    location.belowbar, cTR, size = size.tiny)
+
+plotshape(justOut ? high : na, "Exit · Strike Rate", shape.triangledown, location.abovebar, cSR, size = size.tiny)
+plotshape((trExit and not trOpen) ? high : na, "Exit · SR Trend", shape.diamond, location.abovebar, cTR, size = size.tiny)
+
+barcolor(paint and anyPos ? color.new(colUp, 55) : na, title = "In a trade")
+bgcolor(tint and anyPos ? color.new(colUp, 94) : na, title = "In-trade tint")
+
+var array<line> dayLn = array.new<line>()
+if showDay and newDay
+    dayLn.push(line.new(bar_index, close, bar_index, close + syminfo.mintick, xloc = xloc.bar_index, extend = extend.both, color = color.new(colNu, 78), style = line.style_dotted, width = 1))
+    while dayLn.size() > 20
+        line.delete(dayLn.shift())
+
+var box   bxRew = na
+var box   bxRsk = na
+var label bxLbR = na
+var label bxLbK = na
+newPos = anyPos and not anyPos[1]
+
+closedNow = not anyPos and anyPos[1]
+if showBox and closedNow and not na(bxRew)
+    box.set_bgcolor(bxRew, color.new(colUp, 97))
+    box.set_border_color(bxRew, color.new(colUp, 70))
+    box.set_bgcolor(bxRsk, color.new(colDn, 97))
+    box.set_border_color(bxRsk, color.new(colDn, 70))
+    label.set_color(bxLbR, color.new(colUp, 60))
+    label.set_color(bxLbK, color.new(colDn, 60))
+    label.set_textcolor(bxLbR, color.new(color.black, 45))
+    label.set_textcolor(bxLbK, color.new(color.white, 45))
+
+if showBox and newPos and not na(priEnt)
+    box.delete(bxRew)
+    box.delete(bxRsk)
+    label.delete(bxLbR)
+    label.delete(bxLbK)
+    bxRew := box.new(bar_index, priT2, bar_index + 1, priEnt, border_color = color.new(colUp, 30), border_width = 1, bgcolor = color.new(colUp, 93))
+    bxRsk := box.new(bar_index, priEnt, bar_index + 1, priStp, border_color = color.new(colDn, 30), border_width = 1, bgcolor = color.new(colDn, 93))
+    bxLbR := label.new(bar_index + 1, priT2, "+₹" + str.tostring(bxTop * lotSz, "#,###"), xloc = xloc.bar_index, style = label.style_label_left, color = colUp, textcolor = f_ink(colUp), size = size.tiny)
+    bxLbK := label.new(bar_index + 1, priStp, "−₹" + str.tostring((priEnt - priStp) * lotSz, "#,###"), xloc = xloc.bar_index, style = label.style_label_left, color = colDn, textcolor = color.white, size = size.tiny)
+
+if showBox and anyPos and not na(bxRew)
+    box.set_right(bxRew, bar_index + 1)
+    box.set_right(bxRsk, bar_index + 1)
+    label.set_x(bxLbR, bar_index + 1)
+    label.set_x(bxLbK, bar_index + 1)
+
+f_gl(string k) =>
+    mStyle == "Text" ? (k == "up" ? "BUY" : k == "t1" ? "T1" : k == "r2" ? "RAN T2" : k == "r3" ? "RAN T3" : k == "sl" ? "SL" : k == "eod" ? "EOD" : k == "tag" ? "TAG" : "EXIT") : (k == "up" ? "▲" : k == "t1" ? "✓ T1" : k == "r2" ? "↗ T2" : k == "r3" ? "↗ T3" : k == "sl" ? "✕ SL" : k == "eod" ? "▼ EOD" : k == "tag" ? "◆ TAG" : "▼ EXIT")
+
+showTxt = showLbl and mStyle != "Minimal"
+
+lane = ta.atr(14)
+f_lane(int e) => nz(lane, close * 0.02) * (0.6 + 0.75 * e)
+
+f_tag(string t, float px, color c, int e) =>
+    label.new(bar_index, low - f_lane(e), t + "  " + str.tostring(px, format.mintick), yloc = yloc.price, style = label.style_label_up, color = c, textcolor = f_ink(c), size = size.small)
+f_out(string t, float px, color c, bool dark, int e) =>
+    label.new(bar_index, high + f_lane(e), t + "  " + str.tostring(px, format.mintick), yloc = yloc.price, style = label.style_label_down, color = c, textcolor = f_ink(c), size = size.small)
+
+if showTxt and justIn
+    f_tag(f_no(srNo) + f_gl("up") + " SR " + dots, dEnt, cSR, 0)
+if showTxt and trOpen
+    f_tag(f_no(trNo) + f_gl("up") + " TR " + dots, trEnt, cTR, 1)
+
+srPxA = exWhyHold == "SL" ? dStpPrev : exWhyHold == "T1" ? dEntPrev + tp1p : close
+f_exWord(bool stopped, int stg, bool eod) =>
+    stopped ? f_gl("sl") : stg >= 1 ? f_gl("t1") : eod ? f_gl("eod") : f_gl("out")
+f_exCol(bool stopped, int stg) =>
+    stopped ? colDn : stg >= 1 ? colT1 : colNu
+f_exit(string eng, int no, bool stopped, int stg, bool eod, float px, int lane) =>
+    f_out(f_no(no) + f_exWord(stopped, stg, eod) + " · " + eng, px, f_exCol(stopped, stg), stopped, lane)
+
+if showTxt and justOut
+    srPx = srPxA
+    f_exit("SR", srNo, exWhyHold == "SL", exStgHold, exWhyHold == "EOD", srPx, 0)
+if showTxt and trExit
+    f_exit("TR", trNo, trStopHit, trStg, flatNow, nz(trOut, close), 1)
+
+var array<line>  tmLn = array.new<line>()
+var array<label> tmLb = array.new<label>()
+f_tmark(float px, string tag, string kind, color col, int no, bool ghost = false) =>
+    tmLb.push(label.new(bar_index, px, f_no(no) + f_gl(kind) + " · " + tag + "  " + str.tostring(px, format.mintick), yloc = yloc.price, style = label.style_label_left, color = ghost ? color.new(col, 82) : col, textcolor = ghost ? col : f_ink(col), size = size.small))
+    tmLn.push(line.new(bar_index - 1, px, bar_index + 3, px, xloc = xloc.bar_index, color = ghost ? color.new(col, 45) : col, width = ghost ? 1 : 2, style = ghost ? line.style_dashed : line.style_solid))
+    while tmLn.size() > 120
+        line.delete(tmLn.shift())
+    while tmLb.size() > 120
+        label.delete(tmLb.shift())
+
+var float rchEnt = na
+var int    rchNo  = 0
+var string rchTag = ""
+var bool   rch2   = false
+var bool   rch3   = false
+if justOut and (exWhyHold == "T1")
+    rchEnt := dEntPrev
+    rchNo  := srNo
+    rchTag := "SR"
+    rch2   := false
+    rch3   := false
+if trExit and (trStg >= 1)
+    rchEnt := trEnt
+    rchNo  := trNo
+    rchTag := "TR"
+    rch2   := false
+    rch3   := false
+if sbOpen or flatNow or newDay
+    rchEnt := na
+    rch2   := false
+    rch3   := false
+rchLive = rchOn and showTxt and not na(rchEnt) and not anyPos and barstate.isconfirmed
+if rchLive and not rch2 and high >= rchEnt + tp2p
+    rch2 := true
+    f_tmark(rchEnt + tp2p, rchTag, "r2", colT2, rchNo, true)
+if rchLive and not rch3 and high >= rchEnt + tp3p
+    rch3 := true
+    f_tmark(rchEnt + tp3p, rchTag, "r3", colT3, rchNo, true)
+
+var bool srTag = false
+var bool trTag = false
+if justIn
+    srTag := false
+if trOpen
+    trTag := false
+
+f_tenpt(bool live, float ent, string tag, int no, bool already) =>
+    bool fired = false
+    if tagOn and live and not already and not na(ent) and barstate.isconfirmed and high >= ent + tagPts
+        fired := true
+        if showTxt
+            label.new(bar_index, ent + tagPts, f_no(no) + f_gl("tag") + " · " + tag + "  +" + str.tostring(tagPts, "#"), yloc = yloc.price, style = label.style_label_left, color = color.new(colTag, 25), textcolor = f_ink(color.new(colTag, 0)), size = size.tiny)
+    fired
+
+srTagNow = f_tenpt(srIn,  dEnt,  "SR", srNo, srTag)
+trTagNow = f_tenpt(trPos, trEnt, "TR", trNo, trTag)
+if srTagNow
+    srTag := true
+if trTagNow
+    trTag := true
+tagNow = srTagNow or trTagNow
+tagPx  = srTagNow ? dEnt + tagPts : trTagNow ? trEnt + tagPts : na
+plotshape(tagNow and not showTxt ? tagPx : na, "First move in your favour", shape.diamond, location.absolute, color.new(colTag, 20), size = size.tiny)
+
+plotshape(staleNow, "Stale", shape.diamond, location.belowbar, color.new(colDn, 45), size = size.tiny)
+if showTxt and staleNow
+    label.new(bar_index, low, mStyle == "Text" ? "STALE " + str.tostring(staleAge) + "b" : "◇ " + str.tostring(staleAge) + "b", yloc = yloc.belowbar, style = label.style_label_up, color = color.new(colDn, 45), textcolor = f_ink(colDn), size = size.tiny)
+
+var table sk = table.new(position.bottom_right, 2, 7, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 45))
+if showStk and barstate.islast
+    szK    = size.small
+    bgLumK = 0.299 * color.r(chart.bg_color) + 0.587 * color.g(chart.bg_color) + 0.114 * color.b(chart.bg_color)
+    liteK  = bgLumK > 128
+    kb     = liteK ? color.new(#e8eaed, 0) : color.new(#101826, 0)
+    kt     = liteK ? color.new(#3c4043, 0) : color.new(color.white, 30)
+
+    t1Pct  = close > 0 ? 100.0 * tp1p / close : na
+    slPct  = close > 0 ? 100.0 * slp  / close : na
+    needPt = dlOK ? tp1p / dlEff : na
+
+    isIdx  = dlOK and dlEff > 0.9
+    grade  = isIdx          ? "INDEX CHART"    :
+             na(t1Pct)      ? "—"              :
+             t1Pct <= 20.0  ? "GOOD"           :
+             t1Pct <= 30.0  ? "TIGHT"          : "TOO FAR OUT"
+    gCol   = isIdx ? color.new(color.gray, 25) :
+             grade == "GOOD" ? color.new(colUp, 25) :
+             grade == "TIGHT" ? color.new(#f5a524, 25) : color.new(colDn, 25)
+
+    table.cell(sk, 0, 0, "STRIKE CHECK", bgcolor = kb, text_color = liteK ? color.black : color.white, text_size = szK, text_halign = text.align_left)
+    table.cell(sk, 1, 0, okType ? (isCE ? "CALL" : "PUT") : "CANNOT READ — ASSUMING CALL", bgcolor = okType ? kb : color.new(colDn, 20), text_color = kt, text_size = szK)
+
+    table.cell(sk, 0, 1, "Premium", bgcolor = kb, text_color = kt, text_size = szK, text_halign = text.align_left)
+    table.cell(sk, 1, 1, str.tostring(close, "#.##"), bgcolor = kb, text_color = kt, text_size = szK)
+
+    table.cell(sk, 0, 2, "Delta (measured)", bgcolor = kb, text_color = kt, text_size = szK, text_halign = text.align_left)
+    table.cell(sk, 1, 2, dlOK ? str.tostring(dlEff, "#.00") : "warming up", bgcolor = kb, text_color = kt, text_size = szK)
+
+    table.cell(sk, 0, 3, "T1 needs", bgcolor = kb, text_color = kt, text_size = szK, text_halign = text.align_left)
+    table.cell(sk, 1, 3, na(needPt) ? "—" : str.tostring(needPt, "#") + " index pts", bgcolor = kb, text_color = kt, text_size = szK)
+
+    table.cell(sk, 0, 4, "T1 / stop of premium", bgcolor = kb, text_color = kt, text_size = szK, text_halign = text.align_left)
+    table.cell(sk, 1, 4, na(t1Pct) ? "—" : str.tostring(t1Pct, "#") + "%  /  " + str.tostring(slPct, "#") + "%", bgcolor = kb, text_color = kt, text_size = szK)
+
+    table.cell(sk, 0, 5, "Verdict", bgcolor = kb, text_color = kt, text_size = szK, text_halign = text.align_left)
+    table.cell(sk, 1, 5, grade, bgcolor = gCol, text_color = color.white, text_size = szK)
+
+    table.cell(sk, 0, 6, "Chart timeframe", bgcolor = kb, text_color = kt, text_size = szK, text_halign = text.align_left)
+    table.cell(sk, 1, 6, tfSay,
+         bgcolor = tfOK ? kb : color.new(colDn, 20), text_color = tfOK ? kt : color.white, text_size = szK)
+
+gL  = "Levels"
+gL2 = "Levels · S/R"
+gL3 = "Levels · Trendlines"
+
+mSR = input.bool(false, "S/R levels", group = gL, inline = "lv", tooltip = "⚠ Prices this CONTRACT keeps reacting to, from up to five timeframes at once. Off by default.\n\nThese are the premium's own levels, not Nifty's. Measured on the bhavcopy: with the index standing still the premium still falls a median of 12.8 points a day, so the same Nifty level prints at a different premium every day and the touches never stack up the way they do on an index chart. Useful for reading where THIS contract has traded; not a map of Nifty support and resistance.")
+mTL = input.bool(false, "Trendlines & triangles", group = gL, inline = "lv", tooltip = "⚠ Rising and falling trendlines, their channel, and converging shapes. Off by default.\n\nDrawn on the premium, so the slope is not a fixed translation of a Nifty slope - fitted delta runs from 0.64 deep in the money to 0.14 far out, and a trade travels across that range in an hour. Decay also pulls both lines down together, which can manufacture a triangle where Nifty is not coiling at all.")
+
+rl5On   = input.bool(true,  "5m",  group = gL2, inline = "ra")
+rl5C    = input.color(#42A5F5, "", group = gL2, inline = "ra")
+rl15On  = input.bool(true,  "15m", group = gL2, inline = "ra")
+rl15C   = input.color(#AB47BC, "", group = gL2, inline = "ra")
+rl30On  = input.bool(false, "30m", group = gL2, inline = "ra")
+rl30C   = input.color(#FFA726, "", group = gL2, inline = "ra")
+rl60On  = input.bool(true,  "1H",  group = gL2, inline = "rb")
+rl60C   = input.color(#66BB6A, "", group = gL2, inline = "rb")
+rl240On = input.bool(false, "4H",  group = gL2, inline = "rb")
+rl240C  = input.color(#EC407A, "", group = gL2, inline = "rb")
+rlDOn   = input.bool(false, "1D",  group = gL2, inline = "rb")
+rlDC    = input.color(#EEEEEE, "", group = gL2, inline = "rb")
+rlMax   = input.int(3, "Timeframes running at once", minval = 2, maxval = 5, group = gL2)
+rlPer   = input.int(2, "Levels per timeframe (each side)", minval = 1, maxval = 5, group = gL2)
+rlSens  = input.string("Normal", "Sensitivity", options = ["Strict", "Normal", "Loose"], group = gL2)
+rlFlipOnly = input.bool(false, "Flip levels only", group = gL2)
+
+tlMode = input.string("Fixed (from history)", "Mode", options = ["Fixed (from history)", "Live (updates each candle)"], group = gL3)
+tlStyle = input.string("Triangles only", "Draw", options = ["Triangles only", "Triangles + channel", "Channel", "Trendlines only"], group = gL3, inline = "ts")
+tlFill  = input.bool(true, "shade", group = gL3, inline = "ts")
+tlUpC   = input.color(#26A69A, "Rising",  group = gL3, inline = "tc")
+tlDnC   = input.color(#EF5350, "Falling", group = gL3, inline = "tc")
+tlPiv   = input.int(5, "Swing strength", minval = 2, maxval = 20, group = gL3, inline = "tp")
+tlMinT  = input.int(2, "min touches", minval = 2, maxval = 5, group = gL3, inline = "tp")
+tlConvS = input.string("Normal", "Triangle reach", options = ["Strict", "Normal", "Loose"], group = gL3)
+tlExt   = input.int(30, "Extend right (candles)", minval = 0, maxval = 200, group = gL3)
+tlReg   = input.bool(true, "Regression channel when no trendline qualifies", group = gL3)
+lvLbls  = input.bool(true, "Level labels", group = gL)
+
+sym      = syminfo.tickerid
+atr14    = ta.atr(14)
+wRoll    = ta.change(time("W")) != 0
+intra    = timeframe.isintraday
+showLbls = lvLbls
+FAR_PCT  = 3.0
+LBL_OFF  = 3
+MAXBACK  = 1900
+fD       = 1.0
+near(float v, float mult) =>
+    not na(v) and close != 0 and math.abs(v - close) / close * 100.0 <= FAR_PCT * mult
+
+var int dStart = 0
+var int wStart = 0
+if newDay
+    dStart := bar_index
+if wRoll
+    wStart := bar_index
+
+type Lvl
+    float px
+    float sum
+    int   hits
+    int   hiHits
+    int   loHits
+    int   crosses
+    int   lastSide
+    int   firstB
+    int   lastN
+
+type Eng
+    string tf
+    string name
+    color  col
+    bool   on
+    int    tfSec
+    int    lb
+    float  halfBars
+    int    cutMs
+    array<Lvl> pool
+    int    lastT = na
+    int    n     = 0
+    float  prevC = na
+    float  atr   = na
+
+RL_LEFT  = 3
+RL_RIGHT = 3
+RL_POOL  = 40
+RL_BONUS = 2.0
+RL_SESS  = 22500.0
+rlSep    = RL_LEFT + RL_RIGHT
+rlMinT   = rlSens == "Strict" ? 4    : rlSens == "Loose" ? 2   : 3
+rlMerge  = rlSens == "Strict" ? 0.45 : rlSens == "Loose" ? 0.8 : 0.6
+rlSide   = rlSens == "Loose"  ? 1    : 2
+rlCross  = rlSens == "Strict" ? 2    : 1
+cSec     = timeframe.in_seconds(timeframe.period)
+
+rlBars(int sec) =>
+    sec <= 300 ? 375 : sec <= 900 ? 250 : sec <= 1800 ? 250 : sec <= 3600 ? 250 : sec <= 14400 ? 170 : 500
+
+newEng(string tf, string nm, color c, bool on) =>
+    int   sec = timeframe.in_seconds(tf)
+    int   lb  = rlBars(sec)
+    float bps = sec >= 86400 ? 1.0 : RL_SESS / math.max(sec, 1)
+    float cal = sec < 86400 ? lb * sec / RL_SESS : lb * 1.0
+    Eng.new(tf, nm, c, on, sec, lb, math.max(5.0 * bps, lb * 0.35), int(cal * 1.6 * 86400000), array.new<Lvl>())
+
+rlFits(string tf) => timeframe.in_seconds(tf) >= cSec
+q1 = mSR and rl5On   and rlFits("5")
+n1 = (q1 ? 1 : 0)
+q2 = mSR and rl15On  and rlFits("15")  and n1 < rlMax
+n2 = n1 + (q2 ? 1 : 0)
+q3 = mSR and rl30On  and rlFits("30")  and n2 < rlMax
+n3 = n2 + (q3 ? 1 : 0)
+q4 = mSR and rl60On  and rlFits("60")  and n3 < rlMax
+n4 = n3 + (q4 ? 1 : 0)
+q5 = mSR and rl240On and rlFits("240") and n4 < rlMax
+n5 = n4 + (q5 ? 1 : 0)
+q6 = mSR and rlDOn   and rlFits("D")   and n5 < rlMax
+rlTicked  = (rl5On ? 1 : 0) + (rl15On ? 1 : 0) + (rl30On ? 1 : 0) + (rl60On ? 1 : 0) + (rl240On ? 1 : 0) + (rlDOn ? 1 : 0)
+rlRunning = n5 + (q6 ? 1 : 0)
+
+var array<Eng> engs = array.new<Eng>()
+if barstate.isfirst
+    engs.push(newEng("5",   "5m",  rl5C,   q1))
+    engs.push(newEng("15",  "15m", rl15C,  q2))
+    engs.push(newEng("30",  "30m", rl30C,  q3))
+    engs.push(newEng("60",  "1H",  rl60C,  q4))
+    engs.push(newEng("240", "4H",  rl240C, q5))
+    engs.push(newEng("D",   "1D",  rlDC,   q6))
+
+f_rlSrc() =>
+    pH = ta.pivothigh(high, RL_LEFT, RL_RIGHT)
+    pL = ta.pivotlow(low, RL_LEFT, RL_RIGHT)
+    [pH[1], pL[1], time[1], high[1], low[1], close[1]]
+
+f_rlReq(string tf, bool on) =>
+    [h1, h2, h3, h4, h5, h6] = request.security(sym, on ? tf : timeframe.period, f_rlSrc(), lookahead = barmerge.lookahead_on)
+    [h1, h2, h3, h4, h5, h6]
+
+rlIsFlip(Lvl L0) =>
+    L0.hiHits >= rlSide and L0.loHits >= rlSide and L0.crosses >= rlCross
+
+rlScore(Lvl L0, Eng e) =>
+    float age = math.max(e.n - L0.lastN, 0)
+    (L0.hits + (rlIsFlip(L0) ? RL_BONUS : 0.0)) * math.pow(0.5, age / e.halfBars)
+
+rlCap(Eng e) =>
+    array<Lvl> pool = e.pool
+    while pool.size() > RL_POOL
+        int   worst = 0
+        float ws    = rlScore(pool.get(0), e)
+        for k = 1 to pool.size() - 1
+            float sc = rlScore(pool.get(k), e)
+            if sc < ws
+                ws    := sc
+                worst := k
+        pool.remove(worst)
+    pool.size()
+
+rlPrune(Eng e) =>
+    array<Lvl> pool = e.pool
+    int k = pool.size() - 1
+    while k >= 0
+        if pool.get(k).lastN < e.n - e.lb
+            pool.remove(k)
+        k -= 1
+    pool.size()
+
+rlFind(array<Lvl> pool, float px, float md) =>
+    int   best  = -1
+    float bestD = md
+    int   cnt   = pool.size()
+    if cnt > 0
+        for i = 0 to cnt - 1
+            float d = math.abs(pool.get(i).px - px)
+            if d <= bestD
+                bestD := d
+                best  := i
+    best
+
+rlAbsorb(array<Lvl> pool, int i, float md) =>
+    Lvl L0 = pool.get(i)
+    int j = -1
+    for k = 0 to pool.size() - 1
+        if k != i and math.abs(pool.get(k).px - L0.px) <= md
+            j := k
+            break
+    if j >= 0
+        Lvl L1 = pool.get(j)
+        L0.sum     := L0.sum + L1.sum
+        L0.hits    := L0.hits + L1.hits
+        L0.px      := L0.sum / L0.hits
+        L0.hiHits  := L0.hiHits + L1.hiHits
+        L0.loHits  := L0.loHits + L1.loHits
+        L0.crosses := L0.crosses + L1.crosses
+        L0.firstB  := math.min(L0.firstB, L1.firstB)
+        L0.lastN   := math.max(L0.lastN, L1.lastN)
+        pool.remove(j)
+    j
+
+rlAdd(Eng e, float px, int side, int cn, int fb, float md) =>
+    array<Lvl> pool = e.pool
+    int i = rlFind(pool, px, md)
+    if i == -1
+        pool.push(Lvl.new(px, px, 1, side == 1 ? 1 : 0, side == -1 ? 1 : 0, 0, side == 1 ? -1 : 1, fb, cn))
+    else
+        Lvl L0 = pool.get(i)
+        if math.abs(cn - L0.lastN) >= rlSep
+            L0.sum   := L0.sum + px
+            L0.hits  := L0.hits + 1
+            L0.px    := L0.sum / L0.hits
+            L0.lastN := math.max(L0.lastN, cn)
+            if side == 1
+                L0.hiHits := L0.hiHits + 1
+            else
+                L0.loHits := L0.loHits + 1
+        L0.firstB := math.min(L0.firstB, fb)
+        rlAbsorb(pool, i, md)
+    rlCap(e)
+
+rlScan(array<Lvl> pool, float h, float l, float c, float pc, int cn, float half) =>
+    int cnt = pool.size()
+    if cnt > 0
+        for i = 0 to cnt - 1
+            Lvl L0 = pool.get(i)
+            float p = L0.px
+            bool resRej = pc < p - half and h >= p - half and c < p - half
+            bool supRej = pc > p + half and l <= p + half and c > p + half
+            if (resRej or supRej) and cn - L0.lastN >= rlSep
+                L0.sum   := L0.sum + p
+                L0.hits  := L0.hits + 1
+                L0.lastN := cn
+                if resRej
+                    L0.hiHits := L0.hiHits + 1
+                else
+                    L0.loHits := L0.loHits + 1
+            int sd = c > p + half ? 1 : c < p - half ? -1 : 0
+            if sd != 0
+                if L0.lastSide != 0 and sd != L0.lastSide
+                    L0.crosses := L0.crosses + 1
+                L0.lastSide := sd
+    cnt
+
+rlStep(Eng e, float pH, float pL, int t, float h, float l, float c) =>
+    bool done = false
+    if not na(t) and (na(e.lastT) or t > e.lastT) and t >= last_bar_time - e.cutMs
+        e.lastT := t
+        e.n     := e.n + 1
+        float tr = na(e.prevC) ? h - l : math.max(h - l, math.abs(h - e.prevC), math.abs(l - e.prevC))
+        e.atr := na(e.atr) ? tr : (e.atr * 13.0 + tr) / 14.0
+        if e.n > 14 and e.atr > 0
+            float md = e.atr * rlMerge
+            if not na(e.prevC)
+                rlScan(e.pool, h, l, c, e.prevC, e.n, md * 0.5)
+            int pb = math.max(bar_index - int(math.ceil((RL_RIGHT + 1) * e.tfSec / math.max(cSec, 1.0))), 0)
+            if not na(pH)
+                rlAdd(e, pH, 1, e.n - RL_RIGHT, pb, md)
+            if not na(pL)
+                rlAdd(e, pL, -1, e.n - RL_RIGHT, pb, md)
+            if e.n % 10 == 0
+                rlPrune(e)
+        e.prevC := c
+        done := true
+    done
+
+rlFeed(Eng e, float h1, float h2, int h3, float h4, float h5, float h6) =>
+    if e.on
+        rlStep(e, h1, h2, h3, h4, h5, h6)
+    e.n
+
+[lvq11, lvq12, lvq13, lvq14, lvq15, lvq16] = f_rlReq("5",   q1)
+[lvq21, lvq22, lvq23, lvq24, lvq25, lvq26] = f_rlReq("15",  q2)
+[lvq31, lvq32, lvq33, lvq34, lvq35, lvq36] = f_rlReq("30",  q3)
+[lvq41, lvq42, lvq43, lvq44, lvq45, lvq46] = f_rlReq("60",  q4)
+[lvq51, lvq52, lvq53, lvq54, lvq55, lvq56] = f_rlReq("240", q5)
+[lvq61, lvq62, lvq63, lvq64, lvq65, lvq66] = f_rlReq("D",   q6)
+
+rlFeed(engs.get(0), lvq11, lvq12, lvq13, lvq14, lvq15, lvq16)
+rlFeed(engs.get(1), lvq21, lvq22, lvq23, lvq24, lvq25, lvq26)
+rlFeed(engs.get(2), lvq31, lvq32, lvq33, lvq34, lvq35, lvq36)
+rlFeed(engs.get(3), lvq41, lvq42, lvq43, lvq44, lvq45, lvq46)
+rlFeed(engs.get(4), lvq51, lvq52, lvq53, lvq54, lvq55, lvq56)
+rlFeed(engs.get(5), lvq61, lvq62, lvq63, lvq64, lvq65, lvq66)
+
+TL_MAXP = 20
+tlLive  = tlMode == "Live (updates each candle)"
+tlTriOnly = tlStyle == "Triangles only"
+tlBoth    = tlStyle == "Triangles + channel"
+tlChan    = tlStyle == "Channel" or tlBoth
+tlAllowTri = tlTriOnly or tlBoth
+tlApexMax = tlConvS == "Strict" ? 80 : tlConvS == "Loose" ? 400 : 200
+tlFlatX   = tlConvS == "Strict" ? 1.5 : tlConvS == "Loose" ? 3.0 : 2.0
+tlLook  = rlBars(cSec)
+tlTol   = atr14 * 0.35
+
+var array<float> tlHY = array.new<float>()
+var array<int>   tlHX = array.new<int>()
+var array<float> tlLY = array.new<float>()
+var array<int>   tlLX = array.new<int>()
+
+tlPH = ta.pivothigh(high, tlPiv, tlPiv)
+tlPL = ta.pivotlow(low, tlPiv, tlPiv)
+if mTL and not na(tlPH)
+    tlHY.push(tlPH)
+    tlHX.push(bar_index - tlPiv)
+if mTL and not na(tlPL)
+    tlLY.push(tlPL)
+    tlLX.push(bar_index - tlPiv)
+while tlHX.size() > 0 and (bar_index - tlHX.get(0) > tlLook or tlHX.size() > TL_MAXP)
+    tlHX.shift()
+    tlHY.shift()
+while tlLX.size() > 0 and (bar_index - tlLX.get(0) > tlLook or tlLX.size() > TL_MAXP)
+    tlLX.shift()
+    tlLY.shift()
+
+tlFit(array<float> Y, array<int> X, int side, float tol, int upto) =>
+    float bSl = na
+    float bIc = na
+    int   bX0 = na
+    int   bT  = 0
+    float best = 0.0
+    int n = Y.size()
+    if n >= 2
+        for i = 0 to n - 2
+            if X.get(i) <= upto
+                for j = i + 1 to n - 1
+                    int x1 = X.get(i)
+                    int x2 = X.get(j)
+                    if x2 > x1 and x2 <= upto
+                        float y1 = Y.get(i)
+                        float y2 = Y.get(j)
+                        float sl = (y2 - y1) / (x2 - x1)
+                        bool  ok = true
+                        int   tch = 0
+                        for k = 0 to n - 1
+                            if X.get(k) <= upto
+                                float d = Y.get(k) - (y1 + sl * (X.get(k) - x1))
+                                if side == 1 and d < -tol
+                                    ok := false
+                                    break
+                                if side == -1 and d > tol
+                                    ok := false
+                                    break
+                                if math.abs(d) <= tol
+                                    tch += 1
+                        if ok and tch >= tlMinT
+                            float rec = 1.0 - math.min((upto - x2) / math.max(float(tlLook), 1.0), 1.0)
+                            float sc  = tch + rec * 2.0
+                            if sc > best
+                                best := sc
+                                bSl  := sl
+                                bIc  := y1 - sl * x1
+                                bX0  := x1
+                                bT   := tch
+    [bSl, bIc, bX0, bT]
+
+tlWidth(array<float> Y, array<int> X, float sl, float ic, int x0, int side, int upto) =>
+    float w = 0.0
+    int n = Y.size()
+    if n > 0 and not na(sl)
+        for k = 0 to n - 1
+            if X.get(k) >= x0 and X.get(k) <= upto
+                float d = (Y.get(k) - (ic + sl * X.get(k))) * side
+                w := math.max(w, d)
+    w
+
+var float tlUpSl = na
+var float tlUpIc = na
+var int   tlUpX0 = na
+var int   tlUpT  = 0
+var float tlUpW  = 0.0
+var float tlDnSl = na
+var float tlDnIc = na
+var int   tlDnX0 = na
+var int   tlDnT  = 0
+var float tlDnW  = 0.0
+var float tlRgSl = na
+var float tlRgIc = na
+var float tlRgSd = na
+var int   tlRgX0 = na
+var string tlPat = ""
+var bool   tlConv = false
+var bool  tlPend = true
+
+tlRegress(int upto, int len) =>
+    float sl = na
+    float ic = na
+    float sd = na
+    int   x0 = math.max(upto - len + 1, 0)
+    int   n  = upto - x0 + 1
+    if n >= 20
+        float sx = 0.0
+        float sy = 0.0
+        float sxy = 0.0
+        float sxx = 0.0
+        for b = x0 to upto
+            float y = close[bar_index - b]
+            sx  += b
+            sy  += y
+            sxy += b * y
+            sxx += b * b
+        float den = n * sxx - sx * sx
+        if den != 0
+            sl := (n * sxy - sx * sy) / den
+            ic := (sy - sl * sx) / n
+            float ss = 0.0
+            for b = x0 to upto
+                float d = close[bar_index - b] - (ic + sl * b)
+                ss += d * d
+            sd := math.sqrt(ss / n)
+    [sl, ic, sd, x0]
+
+tlPattern(float us, float ui, int ux, float ds, float di, int dx, int upto) =>
+    bool hasU = not na(us)
+    bool hasD = not na(ds)
+    bool flatU = hasU and math.abs(us) * math.max(upto - ux, 1) < tlTol * tlFlatX
+    bool flatD = hasD and math.abs(ds) * math.max(upto - dx, 1) < tlTol * tlFlatX
+    float apexAhead = na
+    if hasU and hasD and us != ds
+        apexAhead := (di - ui) / (us - ds) - upto
+    bool conv = not na(apexAhead) and apexAhead > 0 and apexAhead <= tlApexMax
+    string r = hasU and hasD ? (conv ? (flatD and us > 0 ? "ascending triangle" : flatU and ds < 0 ? "descending triangle" : us > 0 and ds < 0 ? "symmetrical triangle" : us > 0 and ds > 0 ? "rising wedge" : us < 0 and ds < 0 ? "falling wedge" : "converging") : flatU and flatD ? "range" : us > 0 and ds > 0 ? "rising channel" : us < 0 and ds < 0 ? "falling channel" : "expanding") : hasU ? (flatU ? "flat support" : us > 0 ? "rising support" : "falling support") : hasD ? (flatD ? "flat resistance" : ds < 0 ? "falling resistance" : "rising resistance") : ""
+    [r, conv]
+
+if mTL and (intra ? newDay : wRoll)
+    tlPend := true
+
+var array<line>     lnArr = array.new<line>()
+var array<label>    lblArr = array.new<label>()
+var array<line>     tlLn  = array.new<line>()
+var array<linefill> tlFl  = array.new<linefill>()
+var int    rlShown = 0
+var string rlNames = ""
+
+draw(float v, string txt, color c, int wdt, int transp, int fromBar, int sty) =>
+    bool made = false
+    if not na(v)
+        lnArr.push(line.new(math.max(fromBar, bar_index - MAXBACK), v, bar_index + LBL_OFF, v, xloc = xloc.bar_index, color = color.new(c, transp), width = wdt, style = sty == 1 ? line.style_dashed : line.style_solid))
+        if showLbls
+            lblArr.push(label.new(bar_index + LBL_OFF, v, txt, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(c, 85), textcolor = c, size = size.tiny))
+        made := true
+    made
+
+if (mSR or mTL) and barstate.islast
+    while lnArr.size() > 0
+        line.delete(lnArr.pop())
+    while lblArr.size() > 0
+        label.delete(lblArr.pop())
+
+    rlShown := 0
+    rlNames := ""
+    if mSR
+        for e in engs
+            if e.on
+                rlNames := rlNames + e.name + " "
+                array<Lvl>   pool = e.pool
+                array<int>   uI = array.new<int>()
+                array<float> uS = array.new<float>()
+                array<int>   dI = array.new<int>()
+                array<float> dS = array.new<float>()
+                int np = pool.size()
+                if np > 0
+                    for i = 0 to np - 1
+                        Lvl L0 = pool.get(i)
+                        if L0.hits >= rlMinT and (not rlFlipOnly or rlIsFlip(L0)) and near(L0.px, fD)
+                            if L0.px > close
+                                uI.push(i)
+                                uS.push(rlScore(L0, e))
+                            else
+                                dI.push(i)
+                                dS.push(rlScore(L0, e))
+                if uI.size() > 0
+                    array<int> ou = uS.sort_indices(order.descending)
+                    for k = 0 to math.min(rlPer, ou.size()) - 1
+                        Lvl L0 = pool.get(uI.get(ou.get(k)))
+                        bool fl = rlIsFlip(L0)
+                        bool rs = L0.hiHits >= L0.loHits
+                        draw(L0.px, e.name + (fl ? "◆" : rs ? "▽" : "△") + str.tostring(L0.hits), e.col, fl ? 2 : 1, fl ? 0 : 25, L0.firstB, 0)
+                        rlShown += 1
+                if dI.size() > 0
+                    array<int> od = dS.sort_indices(order.descending)
+                    for k = 0 to math.min(rlPer, od.size()) - 1
+                        Lvl L0 = pool.get(dI.get(od.get(k)))
+                        bool fl = rlIsFlip(L0)
+                        bool rs = L0.hiHits >= L0.loHits
+                        draw(L0.px, e.name + (fl ? "◆" : rs ? "▽" : "△") + str.tostring(L0.hits), e.col, fl ? 2 : 1, fl ? 0 : 25, L0.firstB, 0)
+                        rlShown += 1
+
+    while tlLn.size() > 0
+        line.delete(tlLn.pop())
+    while tlFl.size() > 0
+        linefill.delete(tlFl.pop())
+
+    if mTL
+        if tlLive or tlPend
+            int upto = tlLive ? bar_index : math.max((intra ? dStart : wStart) - 1, 0)
+            [us, ui, ux, ut] = tlFit(tlLY, tlLX, 1, tlTol, upto)
+            [ds, di, dx, dt] = tlFit(tlHY, tlHX, -1, tlTol, upto)
+            tlUpSl := us
+            tlUpIc := ui
+            tlUpX0 := ux
+            tlUpT  := ut
+            tlDnSl := ds
+            tlDnIc := di
+            tlDnX0 := dx
+            tlDnT  := dt
+            tlUpW  := na(us) ? 0.0 : tlWidth(tlHY, tlHX, us, ui, ux, 1, upto)
+            tlDnW  := na(ds) ? 0.0 : tlWidth(tlLY, tlLX, ds, di, dx, -1, upto)
+            [pat, cnv] = tlPattern(us, ui, ux, ds, di, dx, upto)
+            tlPat  := pat
+            tlConv := cnv
+            tlRgSl := na
+            tlRgIc := na
+            tlRgSd := na
+            if tlReg and na(us) and na(ds)
+                tlConv := false
+                [rs, ri, rd, rx] = tlRegress(upto, tlLook)
+                tlRgSl := rs
+                tlRgIc := ri
+                tlRgSd := rd
+                tlRgX0 := rx
+                tlPat  := na(rs) ? "" : "regression"
+            tlPend := false
+
+        bool isTri = tlConv and tlAllowTri
+        int  xApex = na
+        if isTri and not na(tlUpSl) and not na(tlDnSl) and tlUpSl != tlDnSl
+            float ax = (tlDnIc - tlUpIc) / (tlUpSl - tlDnSl)
+            if ax > math.max(tlUpX0, tlDnX0) and ax < bar_index + 300
+                xApex := int(ax)
+        bool triDraw  = isTri and not na(xApex) and tlTriOnly
+        bool triExtra = isTri and not na(xApex) and tlBoth
+        int xR = triDraw ? xApex : bar_index + tlExt
+        line triUp = na
+        line triDn = na
+        bool drawLines = not tlTriOnly or triDraw
+        if not na(tlUpSl) and drawLines
+            float y1 = tlUpIc + tlUpSl * tlUpX0
+            float y2 = tlUpIc + tlUpSl * xR
+            line la = line.new(tlUpX0, y1, xR, y2, xloc = xloc.bar_index, color = tlUpC, width = 2)
+            tlLn.push(la)
+            triUp := la
+            if tlChan and tlUpW > 0
+                line lb = line.new(tlUpX0, y1 + tlUpW, xR, y2 + tlUpW, xloc = xloc.bar_index, color = tlUpC, width = 2)
+                tlLn.push(lb)
+                tlLn.push(line.new(tlUpX0, y1 + tlUpW * 0.5, xR, y2 + tlUpW * 0.5, xloc = xloc.bar_index, color = color.new(tlUpC, 45), width = 1, style = line.style_dashed))
+                if tlFill
+                    tlFl.push(linefill.new(la, lb, color.new(tlUpC, 93)))
+            if showLbls
+                lblArr.push(label.new(xR, y2, "TL▲" + str.tostring(tlUpT), xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(tlUpC, 85), textcolor = tlUpC, size = size.tiny))
+        if not na(tlDnSl) and drawLines
+            float y1 = tlDnIc + tlDnSl * tlDnX0
+            float y2 = tlDnIc + tlDnSl * xR
+            line la = line.new(tlDnX0, y1, xR, y2, xloc = xloc.bar_index, color = tlDnC, width = 2)
+            tlLn.push(la)
+            triDn := la
+            if tlChan and tlDnW > 0
+                line lb = line.new(tlDnX0, y1 - tlDnW, xR, y2 - tlDnW, xloc = xloc.bar_index, color = tlDnC, width = 2)
+                tlLn.push(lb)
+                tlLn.push(line.new(tlDnX0, y1 - tlDnW * 0.5, xR, y2 - tlDnW * 0.5, xloc = xloc.bar_index, color = color.new(tlDnC, 45), width = 1, style = line.style_dashed))
+                if tlFill
+                    tlFl.push(linefill.new(la, lb, color.new(tlDnC, 93)))
+            if showLbls
+                lblArr.push(label.new(xR, y2, "TL▼" + str.tostring(tlDnT), xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(tlDnC, 85), textcolor = tlDnC, size = size.tiny))
+        if triExtra
+            line ea = line.new(tlUpX0, tlUpIc + tlUpSl * tlUpX0, xApex, tlUpIc + tlUpSl * xApex, xloc = xloc.bar_index, color = tlUpC, width = 1)
+            line eb = line.new(tlDnX0, tlDnIc + tlDnSl * tlDnX0, xApex, tlDnIc + tlDnSl * xApex, xloc = xloc.bar_index, color = tlDnC, width = 1)
+            tlLn.push(ea)
+            tlLn.push(eb)
+            if tlFill
+                tlFl.push(linefill.new(ea, eb, color.new(tlPat == "descending triangle" or tlPat == "falling wedge" ? tlDnC : tlUpC, 92)))
+        if (triDraw or triExtra) and (triExtra or (not na(triUp) and not na(triDn)))
+            if triDraw and tlFill and not na(triUp) and not na(triDn)
+                tlFl.push(linefill.new(triUp, triDn, color.new(tlPat == "descending triangle" or tlPat == "falling wedge" ? tlDnC : tlUpC, 92)))
+            float apexY = tlUpIc + tlUpSl * xApex
+            tlLn.push(line.new(xApex, apexY - atr14, xApex, apexY + atr14, xloc = xloc.bar_index,
+                 color = color.new(color.gray, 40), width = 1, style = line.style_dotted))
+            if showLbls
+                color pc = tlPat == "descending triangle" or tlPat == "falling wedge" ? tlDnC : tlUpC
+                lblArr.push(label.new(xApex, apexY, tlPat, xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(pc, 85), textcolor = pc, size = size.tiny))
+        if na(tlUpSl) and na(tlDnSl) and not na(tlRgSl) and not na(tlRgSd) and not tlTriOnly
+            color rc = tlRgSl >= 0 ? tlUpC : tlDnC
+            float m1 = tlRgIc + tlRgSl * tlRgX0
+            float m2 = tlRgIc + tlRgSl * xR
+            float bw = tlRgSd * 2.0
+            line ra = line.new(tlRgX0, m1 + bw, xR, m2 + bw, xloc = xloc.bar_index, color = rc, width = 1, style = line.style_dashed)
+            line rb = line.new(tlRgX0, m1 - bw, xR, m2 - bw, xloc = xloc.bar_index, color = rc, width = 1, style = line.style_dashed)
+            tlLn.push(ra)
+            tlLn.push(rb)
+            tlLn.push(line.new(tlRgX0, m1, xR, m2, xloc = xloc.bar_index, color = color.new(rc, 45), width = 1, style = line.style_dashed))
+            if tlFill
+                tlFl.push(linefill.new(ra, rb, color.new(rc, 94)))
+            if showLbls
+                lblArr.push(label.new(xR, m2 + bw, "REG", xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(rc, 85), textcolor = rc, size = size.tiny))
+
+var table pn = table.new(position.middle_left, 2, 10, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 45))
+if showPnl and barstate.islast
+    sz2 = size.small
+    bgLum  = 0.299 * color.r(chart.bg_color) + 0.587 * color.g(chart.bg_color) + 0.114 * color.b(chart.bg_color)
+    lightC = bgLum > 128
+    anyIn  = srIn or trPos
+    useEnt = srIn ? dEnt : trEnt
+    useStp = srIn ? dStp : trStop
+    opnPts = (srIn  and not na(dEnt)   ? close - dEnt   : 0.0) + (trPos and not na(trEnt) ? close - trEnt : 0.0)
+    rskPts = (srIn  and not na(dEnt)   and not na(dStp)    ? dEnt   - dStp   : 0.0) + (trPos and not na(trEnt) and not na(trStop) ? trEnt - trStop : 0.0)
+    mv  = anyIn ? opnPts : na
+    mp  = anyIn and agree == 1 and not na(useEnt) and useEnt > 0 ? (close - useEnt) / useEnt * 100 : na
+    rup   = anyIn ? opnPts * lotSz : na
+    riskR = anyIn ? rskPts * lotSz : slp * lotSz
+    lotTxt = agree > 1 ? "  ×" + str.tostring(agree) + " lots" : ""
+    good = not na(mv) and mv >= 0
+    vb = not anyIn ? (lightC ? color.new(#dadce0, 0) : color.new(#374151, 25)) : good ? (lightC ? color.new(#d7f2e3, 0) : color.new(#065f46, 12)) : (lightC ? color.new(#fbdcdc, 0) : color.new(#7f1d1d, 12))
+    vt = not anyIn ? (lightC ? color.new(#5f6368, 0) : color.new(color.white, 35)) : good ? (lightC ? #0b6b3a : #6ee7b7) : (lightC ? #a11414 : #fca5a5)
+    lb = lightC ? color.new(#e8eaed, 0) : color.new(#101826, 0)
+    lt = lightC ? color.new(#3c4043, 0) : color.new(color.white, 30)
+    table.cell(pn, 0, 0, "STRIKE CORE", bgcolor = lb, text_color = lightC ? color.black : color.white, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 0, (isCE ? "CALL" : "PUT") + " ×" + str.tostring(lotSz) + "  ·  " + str.tostring(tp1p, "#") + " / " + str.tostring(slp, "#"), bgcolor = lb, text_color = lt, text_size = sz2)
+    table.cell(pn, 0, 1, "Engines", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 1, (useSR ? "①" : "·") + (useTR ? "②" : "·") + "  " + dots, bgcolor = lb, text_color = lt, text_size = sz2)
+    table.cell(pn, 0, 2, "Status", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 2, agree >= 2 ? "IN · BOTH ENGINES" : srIn ? "IN · SR" : trPos ? "IN · TR" : "FLAT", bgcolor = vb, text_color = vt, text_size = sz2)
+    table.cell(pn, 0, 3, "Entry", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 3, anyIn ? str.tostring(useEnt, "#.##") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
+    table.cell(pn, 0, 4, "Move", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 4, na(mv) ? "—" : (mv >= 0 ? "+" : "") + str.tostring(mv, "#.##") + (na(mp) ? "" : "  (" + str.tostring(mp, "#.#") + "%)"), bgcolor = vb, text_color = vt, text_size = sz2)
+    table.cell(pn, 0, 5, "P&L" + lotTxt, bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 5, na(rup) ? "—" : (rup >= 0 ? "+₹" : "-₹") + str.tostring(math.abs(rup), "#,###"), bgcolor = vb, text_color = vt, text_size = sz2)
+    table.cell(pn, 0, 6, "Targets", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    lvlTxt = "T1 " + str.tostring(tp1p, "#") + " · SL " + str.tostring(slp, "#")
+    rungTxt = "T1 " + str.tostring(useEnt + tp1p, format.mintick) + "  ·  SL " + str.tostring(useStp, format.mintick)
+    table.cell(pn, 1, 6, anyIn ? rungTxt : lvlTxt, bgcolor = vb, text_color = vt, text_size = sz2)
+    dayR  = dayPts * lotSz
+    dayC  = dayPts > 0 ? (lightC ? #0b6b3a : colUp) : dayPts < 0 ? (lightC ? #a11414 : colDn) : lt
+    capUse = capShared ? dayOpens : math.max(srDay, trDay)
+    capTxt = maxN > 99999 ? "" : "  ·  " + str.tostring(capUse) + "/" + str.tostring(maxN) + (capShared ? "" : " each")
+    table.cell(pn, 0, 7, "Today" + capTxt, bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    dayOth = math.max(dayN - dayT1 - daySL - agree, 0)
+    dayTxt = "T1 " + str.tostring(dayT1) + " · SL " + str.tostring(daySL) + (dayOth > 0 ? " · flat " + str.tostring(dayOth) : "")
+    table.cell(pn, 1, 7, dayN == 0 ? "no trades yet" : dayTxt + "   " + (dayR >= 0 ? "+₹" : "-₹") + str.tostring(math.abs(dayR), "#,###"), bgcolor = lb, text_color = dayC, text_size = sz2)
+    if showDiag
+        table.cell(pn, 0, 9, "Raw / taken", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+        table.cell(pn, 1, 9, str.tostring(rawA) + "/" + str.tostring(takA) + "  " + str.tostring(rawB) + "/" + str.tostring(takB), bgcolor = lb, text_color = lt, text_size = sz2)
+    table.cell(pn, 0, 8, "Stop", bgcolor = lb, text_color = lt, text_size = sz2, text_halign = text.align_left)
+    table.cell(pn, 1, 8, anyIn ? str.tostring(useStp, "#.##") + "   -₹" + str.tostring(riskR, "#,###") : "—", bgcolor = vb, text_color = vt, text_size = sz2)
+
+gA = "Alerts"
+alertMsg = input.string("{symbol} {engine}#{trade} {action} {price} · T1 {t1} · SL {sl} · {lots} qty", "Alert message", group = gA, tooltip = "⚠ Placeholders: {symbol} {engine} {trade} {action} {price} {t1} {sl} {lots} {agree}\n\n{engine} is SR or TR and {trade} is the number printed beside the mark on the chart, so an exit alert can be matched to the entry alert it closes. Without both, two engines entering on one bar send two identical messages.\n\n{price} on an EXIT is the price the trade actually ended at — the stop on a stop, the target on a target — not the bar's close.\n\n{t2} still resolves if you use it, but it is not an exit: it is the level the move would have to reach for the second hollow mark to print.")
+
+f_msg(string act, float px, string eng, int no) =>
+    bool isEntry = act == "BUY"
+    m = alertMsg
+    m := str.replace_all(m, "{symbol}", syminfo.ticker)
+    m := str.replace_all(m, "{action}", act)
+    m := str.replace_all(m, "{engine}", eng)
+    m := str.replace_all(m, "{trade}",  str.tostring(no))
+    m := str.replace_all(m, "{price}",  str.tostring(px, format.mintick))
+    m := str.replace_all(m, "{t1}",     isEntry ? str.tostring(px + tp1p, format.mintick) : "-")
+    m := str.replace_all(m, "{t2}",     not isEntry ? "-" : str.tostring(px + tp2p, format.mintick))
+    m := str.replace_all(m, "{sl}",     isEntry ? str.tostring(math.max(px - slp, syminfo.mintick), format.mintick) : "-")
+    m := str.replace_all(m, "{lots}",   str.tostring(lotSz))
+    m := str.replace_all(m, "{agree}",  str.tostring(agree))
+    m
+
+alertcondition(justIn, "Strike Rate · Entry", "{{ticker}}")
+alertcondition(justOut, "Strike Rate · Exit", "{{ticker}}")
+alertcondition(trSigU, "SR Trend · Entry", "{{ticker}}")
+trExitAlert = trExit
+alertcondition(trExitAlert, "SR Trend · Exit", "{{ticker}}")
+alertcondition(staleNow, "Stale trade", "{{ticker}}")
+if staleNow
+    alert(f_msg("STALE", close, "--", 0), alert.freq_once_per_bar_close)
+if justIn
+    alert(f_msg("BUY", close, "SR", srNo), alert.freq_once_per_bar_close)
+if justOut
+    alert(f_msg("EXIT", srPxA, "SR", srNo), alert.freq_once_per_bar_close)
+if trSigU
+    alert(f_msg("BUY", close, "TR", trNo), alert.freq_once_per_bar_close)
+if trExitAlert
+    alert(f_msg("EXIT", nz(trOut, close), "TR", trNo), alert.freq_once_per_bar_close)

@@ -1,0 +1,1165 @@
+//@version=6
+// ============================================================================
+//  LEVELS SUITE  —  reference levels for Indian index trading
+//
+//  SIX ENGINES, switched on or off in the ENGINES row at the top of the
+//  settings. Each engine's own settings sit in its numbered section.
+//
+//    1  CPR & Pivots   daily / weekly / monthly CPR, pivots and S/R, the next
+//                      period's CPR, previous day and week high and low,
+//                      and a faint history of past days
+//    2  S/R levels     prices the market keeps reacting to, from up to five
+//                      timeframes at once, each in its own colour
+//    3  Trend          two EMAs with a ribbon, Supertrend, candle colours
+//    4  VWAP & ranges  session VWAP with up to three bands, opening range
+//                      and past opening ranges
+//    5  Momentum       ADX, RSI and the ATR regime (dashboard only)
+//    6  Dashboard      one summary panel
+//
+//  LABEL KEY
+//    D-Pivot D-TC D-BC D-R1..D-R4 D-S1..D-S4   daily CPR and pivots
+//    W- and M- prefixes are the weekly and monthly sets; +1 is the next period
+//    PDH PDL PWH PWL     previous day and week high and low
+//    ORB-H ORB-L         today's opening range
+//    15m◆8               S/R level from the 15-minute candles, FLIP (held as
+//                        both support and resistance), 8 reactions
+//    15m▽5  15m△5        resistance-only / support-only level
+//
+//  Context only. There are no buy or sell signals anywhere in this script.
+// ============================================================================
+
+indicator("Levels Suite", shorttitle = "LVLS", overlay = true,
+     max_lines_count = 500, max_labels_count = 500, max_bars_back = 5000)
+
+// ============================================================================
+//  INPUTS
+// ============================================================================
+G0 = "Engines"
+G1 = "1 · CPR & Pivots"
+G2 = "2 · S/R levels"
+G3 = "3 · Trendlines"
+G4 = "4 · Trend"
+G5 = "5 · VWAP & ranges"
+G6 = "6 · Momentum"
+G7 = "7 · Display & dashboard"
+
+mLevels = input.bool(true, "CPR",       group = G0, inline = "en1")
+mSR     = input.bool(true, "S/R",       group = G0, inline = "en1")
+mTL     = input.bool(true, "Trendlines", group = G0, inline = "en1")
+mTrend  = input.bool(true, "Trend",     group = G0, inline = "en2")
+mVwap   = input.bool(true, "VWAP/ORB",  group = G0, inline = "en2")
+mMom    = input.bool(true, "Momentum",  group = G0, inline = "en2")
+mDash   = input.bool(true, "Dashboard", group = G0, inline = "en2")
+
+// --- 1 · CPR & Pivots --------------------------------------------------------
+dOn   = input.bool(true,  "Daily",   group = G1, inline = "p1")
+dC    = input.color(#2962FF, "",     group = G1, inline = "p1")
+wOn   = input.bool(false, "Weekly",  group = G1, inline = "p1")
+wC    = input.color(#E040FB, "",     group = G1, inline = "p1")
+mOn   = input.bool(false, "Monthly", group = G1, inline = "p1")
+mC    = input.color(#7E57C2, "",     group = G1, inline = "p1")
+depth = input.string("Up to R2/S2", "Pivot depth", options = ["R1/S1", "Up to R2/S2", "All (R4/S4)"], group = G1)
+fOn   = input.bool(false, "Next period", group = G1, inline = "p3",
+     tooltip = "The next period's CPR, computed from the period now in progress. Dashed, because it is not final until that period closes.")
+fC    = input.color(#FF7043, "", group = G1, inline = "p3")
+hOn   = input.bool(true, "History", group = G1, inline = "p4",
+     tooltip = "Keep past days' levels on the chart, drawn faint.")
+histBack = input.string("Last 5", "", options = ["Last 3", "Last 5", "Last 10"], group = G1, inline = "p4")
+pdOn  = input.bool(true,  "Prev day",  group = G1, inline = "h1")
+pdHiC = input.color(#00E676, "",       group = G1, inline = "h1")
+pdLoC = input.color(#FF9100, "",       group = G1, inline = "h1")
+pwOn  = input.bool(false, "Prev week", group = G1, inline = "h2")
+pwHiC = input.color(#2E7D32, "",       group = G1, inline = "h2")
+pwLoC = input.color(#E65100, "",       group = G1, inline = "h2")
+
+// --- 2 · S/R levels ----------------------------------------------------------
+rl5On   = input.bool(true,  "5m",  group = G2, inline = "ra")
+rl5C    = input.color(#29B6F6, "", group = G2, inline = "ra")
+rl15On  = input.bool(true,  "15m", group = G2, inline = "ra")
+rl15C   = input.color(#BA68C8, "", group = G2, inline = "ra")
+rl30On  = input.bool(false, "30m", group = G2, inline = "ra")
+rl30C   = input.color(#F48FB1, "", group = G2, inline = "ra")
+rl60On  = input.bool(true,  "1H",  group = G2, inline = "rb")
+rl60C   = input.color(#D4E157, "", group = G2, inline = "rb")
+rl240On = input.bool(false, "4H",  group = G2, inline = "rb")
+rl240C  = input.color(#FF7043, "", group = G2, inline = "rb")
+rlDOn   = input.bool(false, "1D",  group = G2, inline = "rb")
+rlDC    = input.color(#EEEEEE, "", group = G2, inline = "rb",
+     tooltip = "History used: 5m 5 days, 15m 10 days, 30m a month, 1H two months, 4H four months, 1D two years. A higher timeframe can only use the candles your chart has loaded, so daily levels are best read on a 1H or daily chart.")
+rlMax   = input.int(3, "Timeframes running at once", minval = 2, maxval = 5, group = G2,
+     tooltip = "If more are ticked than this, the ones NEAREST your chart timeframe run first. Each extra timeframe costs a little speed. A timeframe lower than the chart is skipped there.")
+rlPer   = input.int(2, "Levels per timeframe (each side)", minval = 1, maxval = 5, group = G2)
+rlSens  = input.string("Normal", "Sensitivity", options = ["Strict", "Normal", "Loose"], group = G2,
+     tooltip = "Strict - fewer, well-tested levels.  Normal - balanced.  Loose - more levels, including lightly tested ones.\n\n◆ flip - held as BOTH support and resistance, with a close through it in between (drawn bolder).  ▽ resistance only.  △ support only.")
+rlFlipOnly = input.bool(false, "Flip levels only", group = G2)
+
+// --- 3 · Trendlines ----------------------------------------------------------
+tlMode = input.string("Fixed (from history)", "Mode", options = ["Fixed (from history)", "Live (updates each candle)"], group = G3,
+     tooltip = "Fixed - the lines are chosen from the history BEFORE the current session and then held, so what you see at 9:15 is what you see at 15:15, and price either breaks them or respects them.\nLive - the lines are re-chosen as each candle closes, for reading the move in progress.")
+tlStyle = input.string("Triangles only", "Draw", options = ["Triangles only", "Triangles + channel", "Channel", "Trendlines only"], group = G3, inline = "ts",
+     tooltip = "Triangles only - nothing is drawn unless the two lines converge. The cleanest setting: a shape appears only when there is one to trade.\nTriangles + channel - the converging shape when there is one, otherwise the parallel channel.\nChannel - always the trendline plus its parallel copy.\nTrendlines only - the two lines, nothing else.")
+tlFill  = input.bool(true, "shade", group = G3, inline = "ts")
+tlUpC   = input.color(#26A69A, "Rising",  group = G3, inline = "tc")
+tlDnC   = input.color(#EF5350, "Falling", group = G3, inline = "tc")
+tlPiv   = input.int(5, "Swing strength", minval = 2, maxval = 20, group = G3, inline = "tp",
+     tooltip = "Candles either side of a swing. Higher means fewer, more important swings. History used: 5m 5 days, 15m 10 days, 30m a month, 1H two months, 4H four months, 1D two years.")
+tlMinT  = input.int(2, "min touches", minval = 2, maxval = 5, group = G3, inline = "tp")
+tlConvS = input.string("Normal", "Triangle reach", options = ["Strict", "Normal", "Loose"], group = G3,
+     tooltip = "How far ahead the two lines may meet and still count as a triangle. Strict about 80 candles, Normal 200, Loose 400. Loose finds more shapes, including wide wedges; Strict only tight ones close to resolving.\n\nIf you see few triangles, try Loose first, then a swing strength of 3.")
+tlExt   = input.int(30, "Extend right (candles)", minval = 0, maxval = 200, group = G3)
+tlReg   = input.bool(true, "Regression channel when no trendline qualifies", group = G3,
+     tooltip = "A best-fit line through the lookback window with bands two standard deviations either side. It always exists, so a quiet or choppy stretch still gets a frame to trade against. Drawn dashed so it is never mistaken for a swing trendline.")
+
+// --- 4 · Trend ---------------------------------------------------------------
+emaFL  = input.int(9,  "EMA fast", minval = 1, group = G4, inline = "e")
+emaFC  = input.color(#26C6DA, "",  group = G4, inline = "e")
+emaSL  = input.int(21, "slow",     minval = 2, group = G4, inline = "e")
+emaSC  = input.color(#FFA726, "",  group = G4, inline = "e")
+ribbon = input.bool(true, "Ribbon", group = G4, inline = "e")
+stOn   = input.bool(true, "Supertrend", group = G4, inline = "st")
+stLen  = input.int(10, "atr", minval = 1, group = G4, inline = "st")
+stFac  = input.float(3.0, "x", minval = 0.5, step = 0.5, group = G4, inline = "st")
+barSrc = input.string("Off", "Colour candles by", options = ["Off", "EMA ribbon", "Supertrend", "CPR"], group = G4,
+     tooltip = "EMA ribbon - up when the fast EMA and price are both above the slow EMA, down when both are below, yellow when they disagree.\nSupertrend - its direction.\nCPR - above TC up, below BC down, inside yellow.")
+
+// --- 5 · VWAP & ranges -------------------------------------------------------
+showVWAP = input.bool(true, "Session VWAP", group = G5, inline = "vw")
+vwapUpC  = input.color(#26A69A, "", group = G5, inline = "vw")
+vwapDnC  = input.color(#EF5350, "", group = G5, inline = "vw")
+bands    = input.string("±1, ±2", "Bands", options = ["Off", "±1", "±1, ±2", "±1, ±2, ±3"], group = G5,
+     tooltip = "Standard deviations of price around the session VWAP. Index charts carry no volume, so volume is taken from the current-month future automatically; if neither has volume the dashboard says so.")
+showORB  = input.bool(true, "Opening range", group = G5, inline = "orb")
+orbHiC   = input.color(#FFD600, "", group = G5, inline = "orb")
+orbLoC   = input.color(#FF6D00, "", group = G5, inline = "orb")
+orbMins  = input.int(15, "minutes", minval = 1, maxval = 120, group = G5, inline = "orb")
+orbKeep  = input.bool(true, "Keep the past 5 opening ranges (faint)", group = G5)
+
+// --- 7 · Display & dashboard -------------------------------------------------
+showLbls = input.bool(true, "Level labels", group = G7)
+tblPos   = input.string("Top right", "Dashboard", options = ["Top right", "Middle right", "Bottom right", "Top left", "Bottom left"], group = G7, inline = "d")
+tblSize  = input.string("Small", "", options = ["Tiny", "Small", "Normal"], group = G7, inline = "d")
+
+// --- fixed settings (these run in the background) ----------------------------
+FAR_PCT   = 3.0     // levels further than this % from price are not drawn
+VWAP_SM   = 3       // bars of smoothing on the VWAP colour
+ORB_KEEP  = 5       // past opening ranges kept
+RSI_LEN   = 14
+ADX_LEN   = 14
+ADX_TREND = 25.0
+ATR_LOOK  = 60
+HIST_FADE = 35
+ORB_FADE  = 40
+FILL_TR   = 85
+PHL_W     = 2
+LBL_OFF   = 3
+MAXBACK   = 4900
+C_UP  = #26A69A
+C_DN  = #EF5350
+C_WRN = #E8B339
+C_ST_UP = #26A69A
+C_ST_DN = #EF5350
+C_VWB   = #78909C
+C_BAR_U = #64B5F6
+C_BAR_N = #FFF176
+
+dMaxLvl = depth == "R1/S1" ? 1 : depth == "Up to R2/S2" ? 2 : 4
+bandN   = bands == "Off" ? 0 : bands == "±1" ? 1 : bands == "±1, ±2" ? 2 : 3
+nBack   = not hOn ? 0 : histBack == "Last 3" ? 3 : histBack == "Last 5" ? 5 : 10
+
+// ============================================================================
+//  CONTEXT
+// ============================================================================
+sym    = syminfo.tickerid
+atr14  = ta.atr(14)
+newDay = ta.change(time("D")) != 0
+wRoll  = ta.change(time("W")) != 0
+mRoll  = ta.change(time("M")) != 0
+intra  = timeframe.isintraday
+
+// Index charts carry no volume, so a volume-weighted VWAP would really be a
+// time-weighted one. The current-month future has the volume, so it is
+// borrowed here; the dashboard reports which source was used.
+tkr    = syminfo.ticker
+volSym = tkr == "NIFTY" ? "NSE:NIFTY1!" : tkr == "BANKNIFTY" ? "NSE:BANKNIFTY1!" : tkr == "CNXFINANCE" ? "NSE:FINNIFTY1!" : tkr == "NIFTY_MID_SELECT" ? "NSE:MIDCPNIFTY1!" : tkr == "SENSEX" ? "BSE:SENSEX1!" : tkr == "BANKEX" ? "BSE:BANKEX1!" : syminfo.tickerid
+futVol   = request.security(mVwap ? volSym : syminfo.tickerid, timeframe.period, volume, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+futVolOK = not na(futVol) and futVol > 0
+
+cumVolAll = ta.cum(nz(volume, 0))
+hasVol    = not na(volume) and cumVolAll > 0
+istMin    = hour(time, "Asia/Kolkata") * 60 + minute(time, "Asia/Kolkata")
+inSession = istMin >= 9 * 60 + 15 and istMin < 15 * 60 + 30
+
+near(float v, float mult) =>
+    not na(v) and close != 0 and math.abs(v - close) / close * 100.0 <= FAR_PCT * mult
+
+// ============================================================================
+//  ENGINE 1  —  CPR & PIVOTS
+// ============================================================================
+// Traditional pivots, matching TradingView's Pivot Points Standard.
+f_lv(float h, float l, float c) =>
+    p  = (h + l + c) / 3.0
+    bc = (h + l) / 2.0
+    tc = 2.0 * p - bc
+    [p, math.max(tc, bc), math.min(tc, bc),
+     2.0 * p - l, p + (h - l), 2.0 * p + (h - 2.0 * l), 3.0 * p + (h - 3.0 * l),
+     2.0 * p - h, p - (h - l), 2.0 * p - (2.0 * h - l), 3.0 * p - (3.0 * h - l)]
+
+[dHi, dLo, dCl] = request.security(sym, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on)
+[wHi, wLo, wCl] = request.security(sym, "W", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on)
+[mHi, mLo, mCl] = request.security(sym, "M", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on)
+[nHi, nLo, nCl] = request.security(sym, "D", [high, low, close], lookahead = barmerge.lookahead_off)
+[vHi, vLo, vCl] = request.security(sym, "W", [high, low, close], lookahead = barmerge.lookahead_off)
+[uHi, uLo, uCl] = request.security(sym, "M", [high, low, close], lookahead = barmerge.lookahead_off)
+dWidthAvg = request.security(sym, "D", ta.sma(math.abs(2.0 * ((high[1] + low[1] + close[1]) / 3.0 - (high[1] + low[1]) / 2.0)), 20), lookahead = barmerge.lookahead_on)
+
+[dP, dTC, dBC, dR1, dR2, dR3, dR4, dS1, dS2, dS3, dS4] = f_lv(dHi, dLo, dCl)
+[wP, wTC, wBC, wR1, wR2, wR3, wR4, wS1, wS2, wS3, wS4] = f_lv(wHi, wLo, wCl)
+[mP, mTC, mBC, mR1, mR2, mR3, mR4, mS1, mS2, mS3, mS4] = f_lv(mHi, mLo, mCl)
+[fdP, fdTC, fdBC, fdR1, fd5, fd6, fd7, fdS1, fd9, fd10, fd11] = f_lv(nHi, nLo, nCl)
+[fwP, fwTC, fwBC, fwR1, fw5, fw6, fw7, fwS1, fw9, fw10, fw11] = f_lv(vHi, vLo, vCl)
+[fmP, fmTC, fmBC, fmR1, fm5, fm6, fm7, fmS1, fm9, fm10, fm11] = f_lv(uHi, uLo, uCl)
+
+dWidth    = dTC - dBC
+cprNarrow = dWidthAvg > 0 and dWidth < dWidthAvg * 0.6
+cprWide   = dWidthAvg > 0 and dWidth > dWidthAvg * 1.4
+dayType   = cprNarrow ? "NARROW - trend day likely" : cprWide ? "WIDE - choppy day likely" : "normal"
+
+// how far from price each period is allowed to be before it is hidden
+fD = 1.0
+fW = 2.0
+fM = 4.0
+
+lv(bool per, bool shown, float v, float mult) =>
+    mLevels and per and shown and near(v, mult) ? v : na
+
+ph(bool on, float v, float mult) =>
+    mLevels and on and near(v, mult) ? v : na
+
+var int dStart = 0
+var int wStart = 0
+var int mStart = 0
+
+// --- opening range -----------------------------------------------------------
+tfMin  = math.max(timeframe.in_seconds(timeframe.period) / 60.0, 1.0)
+orNeed = math.max(int(math.ceil(orbMins / tfMin)), 1)
+var float orH = na
+var float orL = na
+var int   orBars = 0
+if newDay
+    orH := na
+    orL := na
+    orBars := 0
+if intra and orBars < orNeed
+    orH := na(orH) ? high : math.max(orH, high)
+    orL := na(orL) ? low  : math.min(orL, low)
+    orBars += 1
+orDone = intra and not na(orH) and orBars >= orNeed
+
+// --- faint history of past days ----------------------------------------------
+var array<line> hLines = array.new<line>()
+var array<int>  hGrp   = array.new<int>()
+var array<line> oLines = array.new<line>()
+
+keep(bool on, float v, color c, int wdt, int tr, int a, int b) =>
+    int a2 = math.max(a, bar_index - MAXBACK)
+    bool made = false
+    if on and not na(v) and b > a2
+        hLines.push(line.new(a2, v, b, v, xloc = xloc.bar_index,
+             color = color.new(c, math.min(tr + HIST_FADE, 95)), width = wdt))
+        made := true
+    made ? 1 : 0
+
+// Everything here reads [1] and dStart, so it must run BEFORE dStart advances.
+if newDay and bar_index > 0 and nBack > 0 and intra
+    int a = dStart
+    int b = bar_index - 1
+    bool pv = mLevels and dOn
+    int m = 0
+    m += keep(pv, dP[1],  dC, 2, 0,  a, b)
+    m += keep(pv, dTC[1], dC, 1, 30, a, b)
+    m += keep(pv, dBC[1], dC, 1, 30, a, b)
+    m += keep(pv, dR1[1], dC, 1, 40, a, b)
+    m += keep(pv, dS1[1], dC, 1, 40, a, b)
+    m += keep(pv and dMaxLvl >= 2, dR2[1], dC, 1, 50, a, b)
+    m += keep(pv and dMaxLvl >= 2, dS2[1], dC, 1, 50, a, b)
+    m += keep(mLevels and pdOn, dHi[1], pdHiC, PHL_W, 0, a, b)
+    m += keep(mLevels and pdOn, dLo[1], pdLoC, PHL_W, 0, a, b)
+    hGrp.push(m)
+    while hGrp.size() > nBack
+        int k = hGrp.shift()
+        while k > 0 and hLines.size() > 0
+            line.delete(hLines.shift())
+            k -= 1
+
+// Past opening ranges. orH[1] is the range of the day that just ended, because
+// orH resets on the newDay bar itself.
+if newDay and bar_index > 0 and mVwap and showORB and orbKeep and intra
+    int a2 = math.max(dStart, bar_index - MAXBACK)
+    if not na(orH[1]) and bar_index - 1 > a2
+        oLines.push(line.new(a2, orH[1], bar_index - 1, orH[1], xloc = xloc.bar_index, color = color.new(orbHiC, ORB_FADE), width = 1))
+        oLines.push(line.new(a2, orL[1], bar_index - 1, orL[1], xloc = xloc.bar_index, color = color.new(orbLoC, ORB_FADE), width = 1))
+    while oLines.size() > ORB_KEEP * 2
+        line.delete(oLines.shift())
+
+if newDay
+    dStart := bar_index
+if wRoll
+    wStart := bar_index
+if mRoll
+    mStart := bar_index
+
+// ============================================================================
+//  ENGINE 2  —  S/R LEVELS (multi-timeframe)
+// ============================================================================
+//  One engine per ticked timeframe, each reading only CONFIRMED candles of
+//  that timeframe - never the candle still forming - so the levels are the
+//  same whatever chart you view them on, and nothing moves mid-candle.
+//
+//  Reaction = a swing high or low (3 candles either side), or a candle that
+//  wicks into a known level and closes back on its own side.
+//  Flip      = reactions from BOTH sides with a close through the level in
+//              between: a level that changed roles.
+//  Score     = reactions (plus a bonus for flips), halving with age, so a
+//              level the market has forgotten drops off on its own.
+// ============================================================================
+type Lvl
+    float px
+    float sum
+    int   hits
+    int   hiHits
+    int   loHits
+    int   crosses
+    int   lastSide
+    int   firstB      // chart bar where the level first formed - the line starts here
+    int   lastN
+
+type Eng
+    string tf
+    string name
+    color  col
+    bool   on
+    int    tfSec
+    int    lb
+    float  halfBars
+    int    cutMs
+    array<Lvl> pool
+    int    lastT = na
+    int    n     = 0
+    float  prevC = na
+    float  atr   = na
+
+RL_LEFT  = 3
+RL_RIGHT = 3
+RL_POOL  = 40
+RL_BONUS = 2.0
+RL_SESS  = 22500.0
+rlSep    = RL_LEFT + RL_RIGHT
+rlMinT   = rlSens == "Strict" ? 4    : rlSens == "Loose" ? 2   : 3
+rlMerge  = rlSens == "Strict" ? 0.45 : rlSens == "Loose" ? 0.8 : 0.6
+rlSide   = rlSens == "Loose"  ? 1    : 2
+rlCross  = rlSens == "Strict" ? 2    : 1
+cSec     = timeframe.in_seconds(timeframe.period)
+
+// history each timeframe uses: 5m 5 days, 15m 10 days, 30m a month,
+// 1H two months, 4H four months, 1D two years
+rlBars(int sec) =>
+    sec <= 300 ? 375 : sec <= 900 ? 250 : sec <= 1800 ? 250 : sec <= 3600 ? 250 : sec <= 14400 ? 170 : 500
+
+newEng(string tf, string nm, color c, bool on) =>
+    int   sec = timeframe.in_seconds(tf)
+    int   lb  = rlBars(sec)
+    float bps = sec >= 86400 ? 1.0 : RL_SESS / math.max(sec, 1)
+    float cal = sec < 86400 ? lb * sec / RL_SESS : lb * 1.0
+    Eng.new(tf, nm, c, on, sec, lb, math.max(5.0 * bps, lb * 0.35), int(cal * 1.6 * 86400000), array.new<Lvl>())
+
+// Ticked, at or above the chart timeframe, and at most `rlMax` of them. The
+// ones NEAREST the chart run first: on a 5m chart 5m, 15m and 30m beat 1D,
+// because those are the levels price is working against right now.
+rlFits(string tf) => timeframe.in_seconds(tf) >= cSec
+q1 = mSR and rl5On   and rlFits("5")
+n1 = (q1 ? 1 : 0)
+q2 = mSR and rl15On  and rlFits("15")  and n1 < rlMax
+n2 = n1 + (q2 ? 1 : 0)
+q3 = mSR and rl30On  and rlFits("30")  and n2 < rlMax
+n3 = n2 + (q3 ? 1 : 0)
+q4 = mSR and rl60On  and rlFits("60")  and n3 < rlMax
+n4 = n3 + (q4 ? 1 : 0)
+q5 = mSR and rl240On and rlFits("240") and n4 < rlMax
+n5 = n4 + (q5 ? 1 : 0)
+q6 = mSR and rlDOn   and rlFits("D")   and n5 < rlMax
+rlTicked  = (rl5On ? 1 : 0) + (rl15On ? 1 : 0) + (rl30On ? 1 : 0) + (rl60On ? 1 : 0) + (rl240On ? 1 : 0) + (rlDOn ? 1 : 0)
+rlRunning = n5 + (q6 ? 1 : 0)
+
+var array<Eng> engs = array.new<Eng>()
+if barstate.isfirst
+    engs.push(newEng("5",   "5m",  rl5C,   q1))
+    engs.push(newEng("15",  "15m", rl15C,  q2))
+    engs.push(newEng("30",  "30m", rl30C,  q3))
+    engs.push(newEng("60",  "1H",  rl60C,  q4))
+    engs.push(newEng("240", "4H",  rl240C, q5))
+    engs.push(newEng("D",   "1D",  rlDC,   q6))
+
+f_rlSrc() =>
+    pH = ta.pivothigh(high, RL_LEFT, RL_RIGHT)
+    pL = ta.pivotlow(low, RL_LEFT, RL_RIGHT)
+    [pH[1], pL[1], time[1], high[1], low[1], close[1]]
+
+// expr[1] with lookahead_on is the non-repainting form. A timeframe that is
+// not running asks for the chart's own timeframe, which costs nothing.
+f_rlReq(string tf, bool on) =>
+    [h1, h2, h3, h4, h5, h6] = request.security(sym, on ? tf : timeframe.period, f_rlSrc(), lookahead = barmerge.lookahead_on)
+    [h1, h2, h3, h4, h5, h6]
+
+rlIsFlip(Lvl L0) =>
+    L0.hiHits >= rlSide and L0.loHits >= rlSide and L0.crosses >= rlCross
+
+rlScore(Lvl L0, Eng e) =>
+    float age = math.max(e.n - L0.lastN, 0)
+    (L0.hits + (rlIsFlip(L0) ? RL_BONUS : 0.0)) * math.pow(0.5, age / e.halfBars)
+
+rlCap(Eng e) =>
+    array<Lvl> pool = e.pool
+    while pool.size() > RL_POOL
+        int   worst = 0
+        float ws    = rlScore(pool.get(0), e)
+        for k = 1 to pool.size() - 1
+            float sc = rlScore(pool.get(k), e)
+            if sc < ws
+                ws    := sc
+                worst := k
+        pool.remove(worst)
+    pool.size()
+
+rlPrune(Eng e) =>
+    array<Lvl> pool = e.pool
+    int k = pool.size() - 1
+    while k >= 0
+        if pool.get(k).lastN < e.n - e.lb
+            pool.remove(k)
+        k -= 1
+    pool.size()
+
+rlFind(array<Lvl> pool, float px, float md) =>
+    int   best  = -1
+    float bestD = md
+    int   cnt   = pool.size()
+    if cnt > 0
+        for i = 0 to cnt - 1
+            float d = math.abs(pool.get(i).px - px)
+            if d <= bestD
+                bestD := d
+                best  := i
+    best
+
+rlAbsorb(array<Lvl> pool, int i, float md) =>
+    Lvl L0 = pool.get(i)
+    int j = -1
+    for k = 0 to pool.size() - 1
+        if k != i and math.abs(pool.get(k).px - L0.px) <= md
+            j := k
+            break
+    if j >= 0
+        Lvl L1 = pool.get(j)
+        L0.sum     := L0.sum + L1.sum
+        L0.hits    := L0.hits + L1.hits
+        L0.px      := L0.sum / L0.hits
+        L0.hiHits  := L0.hiHits + L1.hiHits
+        L0.loHits  := L0.loHits + L1.loHits
+        L0.crosses := L0.crosses + L1.crosses
+        L0.firstB  := math.min(L0.firstB, L1.firstB)
+        L0.lastN   := math.max(L0.lastN, L1.lastN)
+        pool.remove(j)
+    j
+
+rlAdd(Eng e, float px, int side, int cn, int fb, float md) =>
+    array<Lvl> pool = e.pool
+    int i = rlFind(pool, px, md)
+    if i == -1
+        pool.push(Lvl.new(px, px, 1, side == 1 ? 1 : 0, side == -1 ? 1 : 0, 0, side == 1 ? -1 : 1, fb, cn))
+    else
+        Lvl L0 = pool.get(i)
+        if math.abs(cn - L0.lastN) >= rlSep
+            L0.sum   := L0.sum + px
+            L0.hits  := L0.hits + 1
+            L0.px    := L0.sum / L0.hits
+            L0.lastN := math.max(L0.lastN, cn)
+            if side == 1
+                L0.hiHits := L0.hiHits + 1
+            else
+                L0.loHits := L0.loHits + 1
+        L0.firstB := math.min(L0.firstB, fb)
+        rlAbsorb(pool, i, md)
+    rlCap(e)
+
+// one pass per candle: wick rejections, and which side the candle closed on
+rlScan(array<Lvl> pool, float h, float l, float c, float pc, int cn, float half) =>
+    int cnt = pool.size()
+    if cnt > 0
+        for i = 0 to cnt - 1
+            Lvl L0 = pool.get(i)
+            float p = L0.px
+            bool resRej = pc < p - half and h >= p - half and c < p - half
+            bool supRej = pc > p + half and l <= p + half and c > p + half
+            if (resRej or supRej) and cn - L0.lastN >= rlSep
+                L0.sum   := L0.sum + p
+                L0.hits  := L0.hits + 1
+                L0.lastN := cn
+                if resRej
+                    L0.hiHits := L0.hiHits + 1
+                else
+                    L0.loHits := L0.loHits + 1
+            int sd = c > p + half ? 1 : c < p - half ? -1 : 0
+            if sd != 0
+                if L0.lastSide != 0 and sd != L0.lastSide
+                    L0.crosses := L0.crosses + 1
+                L0.lastSide := sd
+    cnt
+
+rlStep(Eng e, float pH, float pL, int t, float h, float l, float c) =>
+    bool done = false
+    // candles older than this timeframe's history are skipped entirely
+    if not na(t) and (na(e.lastT) or t > e.lastT) and t >= last_bar_time - e.cutMs
+        e.lastT := t
+        e.n     := e.n + 1
+        float tr = na(e.prevC) ? h - l : math.max(h - l, math.abs(h - e.prevC), math.abs(l - e.prevC))
+        e.atr := na(e.atr) ? tr : (e.atr * 13.0 + tr) / 14.0
+        if e.n > 14 and e.atr > 0
+            float md = e.atr * rlMerge
+            if not na(e.prevC)
+                rlScan(e.pool, h, l, c, e.prevC, e.n, md * 0.5)
+            // chart bar the swing sits on, so the line can start there
+            int pb = math.max(bar_index - int(math.ceil((RL_RIGHT + 1) * e.tfSec / math.max(cSec, 1.0))), 0)
+            if not na(pH)
+                rlAdd(e, pH, 1, e.n - RL_RIGHT, pb, md)
+            if not na(pL)
+                rlAdd(e, pL, -1, e.n - RL_RIGHT, pb, md)
+            if e.n % 10 == 0
+                rlPrune(e)
+        e.prevC := c
+        done := true
+    done
+
+rlFeed(Eng e, float h1, float h2, int h3, float h4, float h5, float h6) =>
+    if e.on
+        rlStep(e, h1, h2, h3, h4, h5, h6)
+    e.n
+
+[g11, g12, g13, g14, g15, g16] = f_rlReq("5",   q1)
+[g21, g22, g23, g24, g25, g26] = f_rlReq("15",  q2)
+[g31, g32, g33, g34, g35, g36] = f_rlReq("30",  q3)
+[g41, g42, g43, g44, g45, g46] = f_rlReq("60",  q4)
+[g51, g52, g53, g54, g55, g56] = f_rlReq("240", q5)
+[g61, g62, g63, g64, g65, g66] = f_rlReq("D",   q6)
+
+rlFeed(engs.get(0), g11, g12, g13, g14, g15, g16)
+rlFeed(engs.get(1), g21, g22, g23, g24, g25, g26)
+rlFeed(engs.get(2), g31, g32, g33, g34, g35, g36)
+rlFeed(engs.get(3), g41, g42, g43, g44, g45, g46)
+rlFeed(engs.get(4), g51, g52, g53, g54, g55, g56)
+rlFeed(engs.get(5), g61, g62, g63, g64, g65, g66)
+
+
+
+// ============================================================================
+//  ENGINE 3  —  TRENDLINES AND CHANNELS
+// ============================================================================
+//  A trendline is only useful if it was already on the chart before price
+//  reached it. In Fixed mode the pair of swings that define each line is
+//  chosen from the candles BEFORE the current session and then held, so the
+//  line does not move while you trade against it. Live mode re-chooses on
+//  every closed candle instead.
+//
+//  A line qualifies only if no other swing of the same kind broke it, and it
+//  must have been touched at least `min touches` times. The best rising line
+//  (from swing lows) and the best falling line (from swing highs) are kept -
+//  never more than one of each, so the chart stays readable.
+//
+//  The channel is that line plus a parallel copy offset to the furthest
+//  opposite swing, with a dashed midline.
+// ============================================================================
+TL_MAXP = 12          // swings kept per side
+tlLive  = tlMode == "Live (updates each candle)"
+// Draw modes are exclusive:
+//   Triangles only     - converging shapes, nothing else
+//   Triangles + channel- the shape when they converge, otherwise the channel
+//   Channel            - always the trendline plus its parallel copy
+//   Trendlines only    - the two lines, nothing else
+tlTriOnly = tlStyle == "Triangles only"
+tlBoth    = tlStyle == "Triangles + channel"
+tlChan    = tlStyle == "Channel" or tlBoth
+tlAllowTri = tlTriOnly or tlBoth
+tlApexMax = tlConvS == "Strict" ? 80 : tlConvS == "Loose" ? 400 : 200
+tlFlatX   = tlConvS == "Strict" ? 1.5 : tlConvS == "Loose" ? 3.0 : 2.0
+tlLook  = rlBars(cSec)
+tlTol   = atr14 * 0.35
+
+var array<float> tlHY = array.new<float>()
+var array<int>   tlHX = array.new<int>()
+var array<float> tlLY = array.new<float>()
+var array<int>   tlLX = array.new<int>()
+
+tlPH = ta.pivothigh(high, tlPiv, tlPiv)
+tlPL = ta.pivotlow(low, tlPiv, tlPiv)
+if mTL and not na(tlPH)
+    tlHY.push(tlPH)
+    tlHX.push(bar_index - tlPiv)
+if mTL and not na(tlPL)
+    tlLY.push(tlPL)
+    tlLX.push(bar_index - tlPiv)
+// keep only recent swings, and only as many as the search needs
+while tlHX.size() > 0 and (bar_index - tlHX.get(0) > tlLook or tlHX.size() > TL_MAXP)
+    tlHX.shift()
+    tlHY.shift()
+while tlLX.size() > 0 and (bar_index - tlLX.get(0) > tlLook or tlLX.size() > TL_MAXP)
+    tlLX.shift()
+    tlLY.shift()
+
+// side 1 = support (built from lows, nothing may sit below it)
+// side -1 = resistance (built from highs, nothing may sit above it)
+tlFit(array<float> Y, array<int> X, int side, float tol, int upto) =>
+    float bSl = na
+    float bIc = na
+    int   bX0 = na
+    int   bT  = 0
+    float best = 0.0
+    int n = Y.size()
+    if n >= 2
+        for i = 0 to n - 2
+            if X.get(i) <= upto
+                for j = i + 1 to n - 1
+                    int x1 = X.get(i)
+                    int x2 = X.get(j)
+                    if x2 > x1 and x2 <= upto
+                        float y1 = Y.get(i)
+                        float y2 = Y.get(j)
+                        float sl = (y2 - y1) / (x2 - x1)
+                        bool  ok = true
+                        int   tch = 0
+                        for k = 0 to n - 1
+                            if X.get(k) <= upto
+                                float d = Y.get(k) - (y1 + sl * (X.get(k) - x1))
+                                if side == 1 and d < -tol
+                                    ok := false
+                                    break
+                                if side == -1 and d > tol
+                                    ok := false
+                                    break
+                                if math.abs(d) <= tol
+                                    tch += 1
+                        if ok and tch >= tlMinT
+                            // touches, plus a bonus for anchors close to now
+                            float rec = 1.0 - math.min((upto - x2) / math.max(tlLook, 1), 1.0)
+                            float sc  = tch + rec * 2.0
+                            if sc > best
+                                best := sc
+                                bSl  := sl
+                                bIc  := y1 - sl * x1
+                                bX0  := x1
+                                bT   := tch
+    [bSl, bIc, bX0, bT]
+
+// widest distance from the line to the opposite swings, for the parallel copy
+tlWidth(array<float> Y, array<int> X, float sl, float ic, int x0, int side, int upto) =>
+    float w = 0.0
+    int n = Y.size()
+    if n > 0 and not na(sl)
+        for k = 0 to n - 1
+            if X.get(k) >= x0 and X.get(k) <= upto
+                float d = (Y.get(k) - (ic + sl * X.get(k))) * side
+                w := math.max(w, d)
+    w
+
+var float tlUpSl = na
+var float tlUpIc = na
+var int   tlUpX0 = na
+var int   tlUpT  = 0
+var float tlUpW  = 0.0
+var float tlDnSl = na
+var float tlDnIc = na
+var int   tlDnX0 = na
+var int   tlDnT  = 0
+var float tlDnW  = 0.0
+var float tlRgSl = na
+var float tlRgIc = na
+var float tlRgSd = na
+var int   tlRgX0 = na
+var string tlPat = ""
+var bool   tlConv = false
+var bool  tlPend = true
+
+// Least squares fit over the window ending at `upto`, plus the spread of
+// price about it. Used only when no swing trendline qualifies.
+tlRegress(int upto, int len) =>
+    float sl = na
+    float ic = na
+    float sd = na
+    int   x0 = math.max(upto - len + 1, 0)
+    int   n  = upto - x0 + 1
+    if n >= 20
+        float sx = 0.0
+        float sy = 0.0
+        float sxy = 0.0
+        float sxx = 0.0
+        for b = x0 to upto
+            float y = close[bar_index - b]
+            sx  += b
+            sy  += y
+            sxy += b * y
+            sxx += b * b
+        float den = n * sxx - sx * sx
+        if den != 0
+            sl := (n * sxy - sx * sy) / den
+            ic := (sy - sl * sx) / n
+            float ss = 0.0
+            for b = x0 to upto
+                float d = close[bar_index - b] - (ic + sl * b)
+                ss += d * d
+            sd := math.sqrt(ss / n)
+    [sl, ic, sd, x0]
+
+// What the two lines together describe. A line counts as flat when it moves
+// less than about an ATR across its whole span, and the pair counts as a
+// triangle whenever they MEET ahead within the chosen reach - which includes
+// wedges, where both lines slope the same way but still converge.
+tlPattern(float us, float ui, int ux, float ds, float di, int dx, int upto) =>
+    bool hasU = not na(us)
+    bool hasD = not na(ds)
+    bool flatU = hasU and math.abs(us) * math.max(upto - ux, 1) < tlTol * tlFlatX
+    bool flatD = hasD and math.abs(ds) * math.max(upto - dx, 1) < tlTol * tlFlatX
+    float apexAhead = na
+    if hasU and hasD and us != ds
+        apexAhead := (di - ui) / (us - ds) - upto
+    bool conv = not na(apexAhead) and apexAhead > 0 and apexAhead <= tlApexMax
+    string r = hasU and hasD ? (conv ? (flatD and us > 0 ? "ascending triangle" : flatU and ds < 0 ? "descending triangle" : us > 0 and ds < 0 ? "symmetrical triangle" : us > 0 and ds > 0 ? "rising wedge" : us < 0 and ds < 0 ? "falling wedge" : "converging") : flatU and flatD ? "range" : us > 0 and ds > 0 ? "rising channel" : us < 0 and ds < 0 ? "falling channel" : "expanding") : hasU ? (flatU ? "flat support" : us > 0 ? "rising support" : "falling support") : hasD ? (flatD ? "flat resistance" : ds < 0 ? "falling resistance" : "rising resistance") : ""
+    [r, conv]
+
+// In Fixed mode a new session asks for one fresh search; Live asks every
+// closed candle.
+if mTL and (intra ? newDay : wRoll)
+    tlPend := true
+
+// ============================================================================
+//  ENGINE 4  —  TREND
+// ============================================================================
+eF = ta.ema(close, emaFL)
+eS = ta.ema(close, emaSL)
+[stVal, stDir] = ta.supertrend(stFac, stLen)
+stUp = stDir < 0
+// ta.barssince must run on every bar, so it lives here and not in the
+// dashboard's last-bar block, where it only ever saw one bar.
+emaCrossAgo = ta.barssince(ta.cross(eF, eS))
+
+pF = plot(mTrend ? eF : na, "EMA fast", color = emaFC, linewidth = 1)
+pS = plot(mTrend ? eS : na, "EMA slow", color = emaSC, linewidth = 1)
+fill(pF, pS, title = "EMA ribbon", color = mTrend and ribbon ? color.new(eF > eS ? C_UP : C_DN, FILL_TR) : na)
+plot(mTrend and stOn ? stVal : na, "Supertrend", color = stUp ? C_ST_UP : C_ST_DN, linewidth = 2, style = plot.style_linebr)
+
+// ============================================================================
+//  ENGINE 5  —  VWAP
+// ============================================================================
+var float cumPV = 0.0
+var float cumV  = 0.0
+var float cumP2 = 0.0
+var bool  sessVol = false
+if newDay
+    cumPV := 0.0
+    cumV  := 0.0
+    cumP2 := 0.0
+    sessVol := false
+wgt = hasVol ? nz(volume, 0.0) : futVolOK ? futVol : 1.0
+if hasVol or futVolOK
+    sessVol := true
+cumPV += hlc3 * wgt
+cumV  += wgt
+cumP2 += hlc3 * hlc3 * wgt
+sVWAP = cumV > 0 ? cumPV / cumV : hlc3
+// Clamped at zero: floating-point error can push the variance slightly
+// negative when price has barely moved, and sqrt of a negative is na, which
+// would blank the bands for the rest of the session.
+vwSD  = math.sqrt(cumV > 0 ? math.max(cumP2 / cumV - sVWAP * sVWAP, 0.0) : 0.0)
+vwapOK  = mVwap and intra and inSession
+vwapRef = ta.ema(close, VWAP_SM)
+vwapCol = vwapRef > sVWAP ? vwapUpC : vwapDnC
+
+plot(vwapOK and showVWAP ? sVWAP : na, "VWAP", color = vwapCol, linewidth = 2, style = plot.style_linebr)
+plot(vwapOK and bandN >= 1 ? sVWAP + vwSD     : na, "VWAP +1σ", color = color.new(C_VWB, 55), style = plot.style_linebr)
+plot(vwapOK and bandN >= 1 ? sVWAP - vwSD     : na, "VWAP −1σ", color = color.new(C_VWB, 55), style = plot.style_linebr)
+plot(vwapOK and bandN >= 2 ? sVWAP + vwSD * 2 : na, "VWAP +2σ", color = color.new(C_VWB, 70), style = plot.style_linebr)
+plot(vwapOK and bandN >= 2 ? sVWAP - vwSD * 2 : na, "VWAP −2σ", color = color.new(C_VWB, 70), style = plot.style_linebr)
+plot(vwapOK and bandN >= 3 ? sVWAP + vwSD * 3 : na, "VWAP +3σ", color = color.new(C_VWB, 82), style = plot.style_linebr)
+plot(vwapOK and bandN >= 3 ? sVWAP - vwSD * 3 : na, "VWAP −3σ", color = color.new(C_VWB, 82), style = plot.style_linebr)
+
+// ============================================================================
+//  ENGINE 6  —  MOMENTUM   (reported, never drawn)
+// ============================================================================
+rsiV = ta.rsi(close, RSI_LEN)
+[diPlus, diMinus, adxV] = ta.dmi(ADX_LEN, ADX_LEN)
+adxState = na(adxV) ? "-" : adxV >= ADX_TREND ? (diPlus > diMinus ? "trending up" : "trending down") : adxV < 20 ? "ranging" : "weak"
+atrLo     = ta.lowest(atr14, ATR_LOOK)
+atrHi     = ta.highest(atr14, ATR_LOOK)
+atrSpan   = atrHi - atrLo
+atrQuiet  = atrSpan > 0 and atr14 <= atrLo + atrSpan * 0.25
+atrExpand = atrSpan > 0 and atr14 >= atrLo + atrSpan * 0.75
+atrPct    = close != 0 ? atr14 / close * 100.0 : na
+
+// ============================================================================
+//  RENDERER
+// ============================================================================
+var int    rlShown = 0
+var string rlNames = ""
+var array<line>  lnArr  = array.new<line>()
+var array<label> lblArr = array.new<label>()
+var array<line>     tlLn = array.new<line>()
+var array<linefill> tlFl = array.new<linefill>()
+
+// sty: 0 solid, 1 dashed
+draw(float v, string txt, color c, int wdt, int transp, int fromBar, int sty) =>
+    bool made = false
+    if not na(v)
+        lnArr.push(line.new(math.max(fromBar, bar_index - MAXBACK), v, bar_index + LBL_OFF, v, xloc = xloc.bar_index,
+             color = color.new(c, transp), width = wdt,
+             style = sty == 1 ? line.style_dashed : line.style_solid))
+        if showLbls
+            lblArr.push(label.new(bar_index + LBL_OFF, v, txt, xloc = xloc.bar_index,
+                 style = label.style_label_left, color = color.new(c, 85), textcolor = c, size = size.tiny))
+        made := true
+    made
+
+// One full pivot set. `pre` is "D-", "W-", "M-"; `nxt` marks the next period,
+// drawn dashed.
+drawSet(string pre, bool per, color c, int from, bool nxt, float p, float tc, float bc, float r1, float r2, float r3, float r4, float s1, float s2, float s3, float s4, float mult) =>
+    string sf  = nxt ? "+1" : ""
+    int    sty = nxt ? 1 : 0
+    draw(lv(per, true, p,  mult), pre + "Pivot" + sf, c, nxt ? 2 : 3, nxt ? 10 : 0,  from, sty)
+    draw(lv(per, true, tc, mult), pre + "TC" + sf,    c, nxt ? 1 : 2, nxt ? 35 : 30, from, sty)
+    draw(lv(per, true, bc, mult), pre + "BC" + sf,    c, nxt ? 1 : 2, nxt ? 35 : 30, from, sty)
+    draw(lv(per, true, r1, mult), pre + "R1" + sf, c, 1, nxt ? 50 : 40, from, sty)
+    draw(lv(per, true, s1, mult), pre + "S1" + sf, c, 1, nxt ? 50 : 40, from, sty)
+    draw(lv(per, dMaxLvl >= 2, r2, mult), pre + "R2" + sf, c, 1, nxt ? 60 : 50, from, sty)
+    draw(lv(per, dMaxLvl >= 2, s2, mult), pre + "S2" + sf, c, 1, nxt ? 60 : 50, from, sty)
+    draw(lv(per, dMaxLvl >= 4, r3, mult), pre + "R3" + sf, c, 1, 60, from, sty)
+    draw(lv(per, dMaxLvl >= 4, s3, mult), pre + "S3" + sf, c, 1, 60, from, sty)
+    draw(lv(per, dMaxLvl >= 4, r4, mult), pre + "R4" + sf, c, 1, 70, from, sty)
+    draw(lv(per, dMaxLvl >= 4, s4, mult), pre + "S4" + sf, c, 1, 70, from, sty)
+
+// Lines and labels are rebuilt once per candle instead of on every tick - the
+// single biggest saving on a busy chart. The dashboard still updates live.
+// `rendered` is a safety net: around the open, the close and in pre/post
+// sessions TradingView can treat the last bar as live before any candle has
+// closed, so until one draw has been kept the script keeps drawing each tick.
+var bool rendered = false
+doRender = barstate.islastconfirmedhistory or (barstate.islast and barstate.ishistory) or (barstate.isrealtime and (barstate.isconfirmed or not rendered))
+
+if doRender
+    rendered := true
+    while lnArr.size() > 0
+        line.delete(lnArr.pop())
+    while lblArr.size() > 0
+        label.delete(lblArr.pop())
+
+    // --- CPR and pivots ------------------------------------------------------
+    drawSet("D-", dOn, dC, dStart, false, dP, dTC, dBC, dR1, dR2, dR3, dR4, dS1, dS2, dS3, dS4, fD)
+    drawSet("W-", wOn, wC, wStart, false, wP, wTC, wBC, wR1, wR2, wR3, wR4, wS1, wS2, wS3, wS4, fW)
+    drawSet("M-", mOn, mC, mStart, false, mP, mTC, mBC, mR1, mR2, mR3, mR4, mS1, mS2, mS3, mS4, fM)
+    if fOn
+        drawSet("D-", dOn, fC, dStart, true, fdP, fdTC, fdBC, fdR1, na, na, na, fdS1, na, na, na, fD)
+        drawSet("W-", wOn, fC, wStart, true, fwP, fwTC, fwBC, fwR1, na, na, na, fwS1, na, na, na, fW)
+        drawSet("M-", mOn, fC, mStart, true, fmP, fmTC, fmBC, fmR1, na, na, na, fmS1, na, na, na, fM)
+
+    // --- previous highs and lows ----------------------------------------------
+    draw(ph(pdOn, dHi, fD), "PDH", pdHiC, PHL_W, 0, dStart, 0)
+    draw(ph(pdOn, dLo, fD), "PDL", pdLoC, PHL_W, 0, dStart, 0)
+    draw(ph(pwOn, wHi, fW), "PWH", pwHiC, PHL_W, 0, wStart, 0)
+    draw(ph(pwOn, wLo, fW), "PWL", pwLoC, PHL_W, 0, wStart, 0)
+
+    // --- opening range ---------------------------------------------------------
+    draw(mVwap and showORB and orDone ? orH : na, "ORB-H", orbHiC, 2, 0, dStart, 0)
+    draw(mVwap and showORB and orDone ? orL : na, "ORB-L", orbLoC, 2, 0, dStart, 0)
+
+    // --- S/R levels, one timeframe at a time ---------------------------------
+    // The best-scoring levels each side of price, chosen on a closed candle so
+    // the set never changes while the current one is forming.
+    rlShown := 0
+    rlNames := ""
+    if mSR
+        for e in engs
+            if e.on
+                rlNames := rlNames + e.name + " "
+                array<Lvl>   pool = e.pool
+                array<int>   uI = array.new<int>()
+                array<float> uS = array.new<float>()
+                array<int>   dI = array.new<int>()
+                array<float> dS = array.new<float>()
+                int np = pool.size()
+                if np > 0
+                    for i = 0 to np - 1
+                        Lvl L0 = pool.get(i)
+                        if L0.hits >= rlMinT and (not rlFlipOnly or rlIsFlip(L0)) and near(L0.px, fD)
+                            if L0.px > close
+                                uI.push(i)
+                                uS.push(rlScore(L0, e))
+                            else
+                                dI.push(i)
+                                dS.push(rlScore(L0, e))
+                if uI.size() > 0
+                    array<int> ou = uS.sort_indices(order.descending)
+                    for k = 0 to math.min(rlPer, ou.size()) - 1
+                        Lvl L0 = pool.get(uI.get(ou.get(k)))
+                        bool fl = rlIsFlip(L0)
+                        bool rs = L0.hiHits >= L0.loHits
+                        draw(L0.px, e.name + (fl ? "◆" : rs ? "▽" : "△") + str.tostring(L0.hits), e.col, fl ? 2 : 1, fl ? 0 : 25, L0.firstB, 0)
+                        rlShown += 1
+                if dI.size() > 0
+                    array<int> od = dS.sort_indices(order.descending)
+                    for k = 0 to math.min(rlPer, od.size()) - 1
+                        Lvl L0 = pool.get(dI.get(od.get(k)))
+                        bool fl = rlIsFlip(L0)
+                        bool rs = L0.hiHits >= L0.loHits
+                        draw(L0.px, e.name + (fl ? "◆" : rs ? "▽" : "△") + str.tostring(L0.hits), e.col, fl ? 2 : 1, fl ? 0 : 25, L0.firstB, 0)
+                        rlShown += 1
+
+
+    // --- trendlines and channels -----------------------------------------------
+    while tlLn.size() > 0
+        line.delete(tlLn.pop())
+    while tlFl.size() > 0
+        linefill.delete(tlFl.pop())
+
+    if mTL
+        // Fixed mode searches only the candles BEFORE this session, so the
+        // lines are already in place when the session starts.
+        if tlLive or tlPend
+            int upto = tlLive ? bar_index : math.max((intra ? dStart : wStart) - 1, 0)
+            [us, ui, ux, ut] = tlFit(tlLY, tlLX, 1, tlTol, upto)
+            [ds, di, dx, dt] = tlFit(tlHY, tlHX, -1, tlTol, upto)
+            tlUpSl := us
+            tlUpIc := ui
+            tlUpX0 := ux
+            tlUpT  := ut
+            tlDnSl := ds
+            tlDnIc := di
+            tlDnX0 := dx
+            tlDnT  := dt
+            tlUpW  := na(us) ? 0.0 : tlWidth(tlHY, tlHX, us, ui, ux, 1, upto)
+            tlDnW  := na(ds) ? 0.0 : tlWidth(tlLY, tlLX, ds, di, dx, -1, upto)
+            [pat, cnv] = tlPattern(us, ui, ux, ds, di, dx, upto)
+            tlPat  := pat
+            tlConv := cnv
+            // fallback: a regression channel when neither side qualified
+            tlRgSl := na
+            tlRgIc := na
+            tlRgSd := na
+            if tlReg and na(us) and na(ds)
+                tlConv := false
+                [rs, ri, rd, rx] = tlRegress(upto, tlLook)
+                tlRgSl := rs
+                tlRgIc := ri
+                tlRgSd := rd
+                tlRgX0 := rx
+                tlPat  := na(rs) ? "" : "regression"
+            tlPend := false
+
+        // A triangle is drawn to its apex - the point where the two lines
+        // meet - and shaded, instead of running on for a fixed distance.
+        bool isTri = tlConv and tlAllowTri
+        int  xApex = na
+        if isTri and not na(tlUpSl) and not na(tlDnSl) and tlUpSl != tlDnSl
+            float ax = (tlDnIc - tlUpIc) / (tlUpSl - tlDnSl)
+            // The apex may already be behind the current candle - that is
+            // exactly the case where price has broken out of the triangle, so
+            // the shape is still drawn, ending where the lines met.
+            if ax > math.max(tlUpX0, tlDnX0) and ax < bar_index + 300
+                xApex := int(ax)
+        // "Triangles only" ends the lines at the apex. "Triangles + channel"
+        // keeps the full channel and adds the shape on top of it.
+        bool triDraw  = isTri and not na(xApex) and tlTriOnly
+        bool triExtra = isTri and not na(xApex) and tlBoth
+        int xR = triDraw ? xApex : bar_index + tlExt
+        line triUp = na
+        line triDn = na
+        // In "Triangles only" the chart stays empty until the two lines
+        // actually converge into one.
+        bool drawLines = not tlTriOnly or triDraw
+        if not na(tlUpSl) and drawLines
+            float y1 = tlUpIc + tlUpSl * tlUpX0
+            float y2 = tlUpIc + tlUpSl * xR
+            line la = line.new(tlUpX0, y1, xR, y2, xloc = xloc.bar_index, color = tlUpC, width = 2)
+            tlLn.push(la)
+            triUp := la
+            if tlChan and tlUpW > 0
+                line lb = line.new(tlUpX0, y1 + tlUpW, xR, y2 + tlUpW, xloc = xloc.bar_index, color = tlUpC, width = 2)
+                tlLn.push(lb)
+                tlLn.push(line.new(tlUpX0, y1 + tlUpW * 0.5, xR, y2 + tlUpW * 0.5, xloc = xloc.bar_index, color = color.new(tlUpC, 45), width = 1, style = line.style_dashed))
+                if tlFill
+                    tlFl.push(linefill.new(la, lb, color.new(tlUpC, 93)))
+            if showLbls
+                lblArr.push(label.new(xR, y2, "TL▲" + str.tostring(tlUpT), xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(tlUpC, 85), textcolor = tlUpC, size = size.tiny))
+        if not na(tlDnSl) and drawLines
+            float y1 = tlDnIc + tlDnSl * tlDnX0
+            float y2 = tlDnIc + tlDnSl * xR
+            line la = line.new(tlDnX0, y1, xR, y2, xloc = xloc.bar_index, color = tlDnC, width = 2)
+            tlLn.push(la)
+            triDn := la
+            if tlChan and tlDnW > 0
+                line lb = line.new(tlDnX0, y1 - tlDnW, xR, y2 - tlDnW, xloc = xloc.bar_index, color = tlDnC, width = 2)
+                tlLn.push(lb)
+                tlLn.push(line.new(tlDnX0, y1 - tlDnW * 0.5, xR, y2 - tlDnW * 0.5, xloc = xloc.bar_index, color = color.new(tlDnC, 45), width = 1, style = line.style_dashed))
+                if tlFill
+                    tlFl.push(linefill.new(la, lb, color.new(tlDnC, 93)))
+            if showLbls
+                lblArr.push(label.new(xR, y2, "TL▼" + str.tostring(tlDnT), xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(tlDnC, 85), textcolor = tlDnC, size = size.tiny))
+        // shade the triangle, mark the apex and name the pattern there
+        if triExtra
+            // the shape drawn over the channel: its own pair of lines, from
+            // the anchors to the apex
+            line ea = line.new(tlUpX0, tlUpIc + tlUpSl * tlUpX0, xApex, tlUpIc + tlUpSl * xApex, xloc = xloc.bar_index, color = tlUpC, width = 1)
+            line eb = line.new(tlDnX0, tlDnIc + tlDnSl * tlDnX0, xApex, tlDnIc + tlDnSl * xApex, xloc = xloc.bar_index, color = tlDnC, width = 1)
+            tlLn.push(ea)
+            tlLn.push(eb)
+            if tlFill
+                tlFl.push(linefill.new(ea, eb, color.new(tlPat == "descending triangle" or tlPat == "falling wedge" ? tlDnC : tlUpC, 92)))
+        if (triDraw or triExtra) and (triExtra or (not na(triUp) and not na(triDn)))
+            if triDraw and tlFill and not na(triUp) and not na(triDn)
+                tlFl.push(linefill.new(triUp, triDn, color.new(tlPat == "descending triangle" or tlPat == "falling wedge" ? tlDnC : tlUpC, 92)))
+            float apexY = tlUpIc + tlUpSl * xApex
+            tlLn.push(line.new(xApex, apexY - atr14, xApex, apexY + atr14, xloc = xloc.bar_index,
+                 color = color.new(color.gray, 40), width = 1, style = line.style_dotted))
+            if showLbls
+                color pc = tlPat == "descending triangle" or tlPat == "falling wedge" ? tlDnC : tlUpC
+                lblArr.push(label.new(xApex, apexY, tlPat, xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(pc, 85), textcolor = pc, size = size.tiny))
+        if na(tlUpSl) and na(tlDnSl) and not na(tlRgSl) and not na(tlRgSd) and not tlTriOnly
+            color rc = tlRgSl >= 0 ? tlUpC : tlDnC
+            float m1 = tlRgIc + tlRgSl * tlRgX0
+            float m2 = tlRgIc + tlRgSl * xR
+            float bw = tlRgSd * 2.0
+            line ra = line.new(tlRgX0, m1 + bw, xR, m2 + bw, xloc = xloc.bar_index, color = rc, width = 1, style = line.style_dashed)
+            line rb = line.new(tlRgX0, m1 - bw, xR, m2 - bw, xloc = xloc.bar_index, color = rc, width = 1, style = line.style_dashed)
+            tlLn.push(ra)
+            tlLn.push(rb)
+            tlLn.push(line.new(tlRgX0, m1, xR, m2, xloc = xloc.bar_index, color = color.new(rc, 45), width = 1, style = line.style_dashed))
+            if tlFill
+                tlFl.push(linefill.new(ra, rb, color.new(rc, 94)))
+            if showLbls
+                lblArr.push(label.new(xR, m2 + bw, "REG", xloc = xloc.bar_index,
+                     style = label.style_label_left, color = color.new(rc, 85), textcolor = rc, size = size.tiny))
+
+    // --- labels for the curves, which stay as plots -----------------------------
+    if showLbls
+        if vwapOK and showVWAP
+            lblArr.push(label.new(bar_index + LBL_OFF, sVWAP, sessVol ? "VWAP" : "TWAP", xloc = xloc.bar_index,
+                 style = label.style_label_left, color = color.new(vwapCol, 85), textcolor = vwapCol, size = size.tiny))
+        if mTrend
+            lblArr.push(label.new(bar_index + LBL_OFF, eF, "EMA " + str.tostring(emaFL), xloc = xloc.bar_index,
+                 style = label.style_label_left, color = color.new(emaFC, 85), textcolor = emaFC, size = size.tiny))
+            lblArr.push(label.new(bar_index + LBL_OFF, eS, "EMA " + str.tostring(emaSL), xloc = xloc.bar_index,
+                 style = label.style_label_left, color = color.new(emaSC, 85), textcolor = emaSC, size = size.tiny))
+
+// The line values are read AFTER the renderer, because that is where the
+// search fills them in. Reading them earlier showed "none found" on the very
+// bar that had just drawn the lines.
+tlValueUp = na(tlUpSl) ? na : tlUpIc + tlUpSl * bar_index
+tlValueDn = na(tlDnSl) ? na : tlDnIc + tlDnSl * bar_index
+// when the fallback is in use, its bands stand in for the two lines
+tlRgMid   = na(tlRgSl) ? na : tlRgIc + tlRgSl * bar_index
+tlEdgeUp  = not na(tlValueUp) ? tlValueUp : na(tlRgMid) ? na : tlRgMid - tlRgSd * 2.0
+tlEdgeDn  = not na(tlValueDn) ? tlValueDn : na(tlRgMid) ? na : tlRgMid + tlRgSd * 2.0
+
+// ============================================================================
+//  CANDLE COLOURS
+// ============================================================================
+barState = switch barSrc
+    "EMA ribbon" => eF >= eS and close > eS ? 1 : eF <= eS and close < eS ? -1 : 2
+    "Supertrend" => stUp ? 1 : -1
+    "CPR"        => close > dTC ? 1 : close < dBC ? -1 : 2
+    => 0
+barcolor(not mTrend or barState == 0 ? na : barState == 1 ? C_BAR_U : barState == -1 ? C_DN : C_BAR_N, title = "Candle colour")
+
+// ============================================================================
+//  ENGINE 7  —  DASHBOARD
+// ============================================================================
+dPos = switch tblPos
+    "Top right"    => position.top_right
+    "Middle right" => position.middle_right
+    "Bottom right" => position.bottom_right
+    "Top left"     => position.top_left
+    => position.bottom_left
+dSize = tblSize == "Tiny" ? size.tiny : tblSize == "Small" ? size.small : size.normal
+
+var table hud = table.new(dPos, 2, 14, border_width = 1, frame_width = 1,
+     frame_color = color.new(color.gray, 50), bgcolor = color.new(color.black, 20))
+
+row(int i, string k, string v, color c) =>
+    table.cell(hud, 0, i, k, text_color = color.silver, text_size = dSize, text_halign = text.align_left)
+    table.cell(hud, 1, i, v, text_color = c,            text_size = dSize, text_halign = text.align_right)
+
+fmt(float v) => na(v) ? "-" : str.tostring(v, format.mintick)
+
+if mDash and barstate.islast
+    onTxt   = (dOn ? "D " : "") + (wOn ? "W " : "") + (mOn ? "M " : "") + (fOn ? "+1 " : "") + (hOn ? "H" : "")
+    cprSide = close > dTC ? "above daily TC" : close < dBC ? "below daily BC" : "inside daily CPR"
+    cprCol  = close > dTC ? C_UP : close < dBC ? C_DN : C_WRN
+    rlTxt   = not mSR ? "off" : rlRunning == 0 ? "no timeframe fits this chart" : rlNames + " ·  " + str.tostring(rlShown) + " shown" + (rlTicked > rlRunning ? "  ·  " + str.tostring(rlTicked - rlRunning) + " skipped" : "")
+    vwapTxt = not vwapOK ? (intra ? "outside market hours" : "intraday charts only") : (vwapRef > sVWAP ? "above" : "below") + (bandN > 0 and vwSD > 0 ? "   " + str.tostring((close - sVWAP) / vwSD, "#.#") + " sd" : "") + (sessVol ? "" : "   no volume = TWAP")
+    orTxt   = not showORB ? "off" : not intra ? "intraday charts only" : not orDone ? "forming (" + str.tostring(orBars) + " of " + str.tostring(orNeed) + " bars)" : (close > orH ? "above" : close < orL ? "below" : "inside") + "   " + fmt(orL) + " - " + fmt(orH)
+    stTxt   = not mTrend or not stOn ? "off" : (stUp ? "up" : "down") + "   " + fmt(stVal)
+    emaTxt  = not mTrend ? "off" : str.tostring(emaFL) + "/" + str.tostring(emaSL) + "   " + (eF > eS ? "bull" : "bear") + (na(emaCrossAgo) ? "" : "   " + str.tostring(emaCrossAgo) + " bars")
+    adxTxt  = not mMom ? "off" : str.tostring(adxV, "#.#") + "   " + adxState
+    rsiTxt  = not mMom ? "off" : str.tostring(rsiV, "#.#") + (rsiV >= 70 ? "   overbought" : rsiV <= 30 ? "   oversold" : "")
+    perDay  = intra ? 22500.0 / math.max(cSec, 1) : 1.0
+    tlBroke = not na(tlEdgeDn) and close > tlEdgeDn ? 1 : not na(tlEdgeUp) and close < tlEdgeUp ? -1 : 0
+    tlSlope = not na(tlUpSl) ? tlUpSl : not na(tlDnSl) ? tlDnSl : tlRgSl
+    tlTri   = tlConv
+    tlTxt   = not mTL ? "off" : tlTriOnly and not tlTri ? "no triangle right now" : na(tlEdgeUp) and na(tlEdgeDn) ? "none found" : (tlPat == "" ? "" : tlPat + "  ·  ") + (na(tlEdgeUp) ? "" : "▲ " + fmt(tlEdgeUp) + "  ") + (na(tlEdgeDn) ? "" : "▼ " + fmt(tlEdgeDn) + "  ") + (tlBroke == 1 ? "broken up" : tlBroke == -1 ? "broken down" : "inside") + (na(tlSlope) ? "" : "   " + (tlSlope >= 0 ? "+" : "") + str.tostring(tlSlope * perDay, "#") + "/day")
+    atrTxt  = fmt(atr14) + "   " + str.tostring(atrPct, "#.##") + "%" + (atrQuiet ? "   quiet" : atrExpand ? "   expanding" : "")
+
+    row(0,  "Periods shown", onTxt == "" ? "none" : onTxt, color.white)
+    row(1,  "Daily CPR width", dayType, cprNarrow ? C_UP : cprWide ? C_DN : color.silver)
+    row(2,  "Location", cprSide, cprCol)
+    row(3,  "D pivot / TC / BC", fmt(dP) + " / " + fmt(dTC) + " / " + fmt(dBC), dC)
+    row(4,  "PDH / PDL", fmt(dHi) + " / " + fmt(dLo), pdHiC)
+    row(5,  "S/R levels", rlTxt, not mSR ? color.gray : rlShown > 0 ? rl5C : C_WRN)
+    row(6,  "VWAP", vwapTxt, not vwapOK ? color.gray : vwapRef > sVWAP ? C_UP : C_DN)
+    row(7,  "Opening range", orTxt, not orDone ? color.silver : close > orH ? C_UP : close < orL ? C_DN : C_WRN)
+    row(8,  "EMA cross", emaTxt, not mTrend ? color.gray : eF > eS ? C_UP : C_DN)
+    row(9,  "Supertrend", stTxt, not mTrend or not stOn ? color.gray : stUp ? C_UP : C_DN)
+    row(10, "ADX", adxTxt, not mMom ? color.gray : adxV >= ADX_TREND ? (diPlus > diMinus ? C_UP : C_DN) : C_WRN)
+    row(11, "RSI", rsiTxt, not mMom ? color.gray : rsiV >= 70 or rsiV <= 30 ? C_WRN : color.white)
+    row(12, "Trendlines", tlTxt, not mTL ? color.gray : na(tlEdgeUp) and na(tlEdgeDn) ? color.silver : tlBroke == 1 ? C_UP : tlBroke == -1 ? C_DN : color.white)
+    row(13, "ATR", atrTxt, atrQuiet or atrExpand ? C_WRN : color.white)
+
+// ============================================================================
+//  ALERTS  —  context only
+// ============================================================================
+// Each ta.* call sits on its own line so it runs on every bar; inside an `and`
+// it could be skipped, which breaks functions that need the previous bar.
+xTCup  = ta.crossover(close, dTC)
+xBCdn  = ta.crossunder(close, dBC)
+xR1up  = ta.crossover(close, dR1)
+xS1dn  = ta.crossunder(close, dS1)
+xPDHup = ta.crossover(close, dHi)
+xPDLdn = ta.crossunder(close, dLo)
+xORup  = ta.crossover(close, orH)
+xORdn  = ta.crossunder(close, orL)
+xSTfl  = ta.change(stDir) != 0
+xTLup  = ta.crossover(close, tlEdgeDn)
+xTLdn  = ta.crossunder(close, tlEdgeUp)
+xQuiet = atrQuiet and not atrQuiet[1]
+xExpand = atrExpand and not atrExpand[1]
+
+alertcondition(xTCup,  "Above daily TC",  "{{ticker}} crossed above the daily CPR top")
+alertcondition(xBCdn,  "Below daily BC",  "{{ticker}} crossed below the daily CPR bottom")
+alertcondition(xR1up,  "Crossed daily R1", "{{ticker}} crossed daily R1")
+alertcondition(xS1dn,  "Crossed daily S1", "{{ticker}} crossed daily S1")
+alertcondition(xPDHup, "Above PDH", "{{ticker}} crossed above the previous day high")
+alertcondition(xPDLdn, "Below PDL", "{{ticker}} crossed below the previous day low")
+alertcondition(orDone and xORup, "Opening range breakout",  "{{ticker}} broke above the opening range")
+alertcondition(orDone and xORdn, "Opening range breakdown", "{{ticker}} broke below the opening range")
+alertcondition(xTLup,  "Trendline break up",   "{{ticker}} closed above the falling trendline")
+alertcondition(xTLdn,  "Trendline break down", "{{ticker}} closed below the rising trendline")
+alertcondition(xSTfl,  "Supertrend flip", "{{ticker}} Supertrend changed direction")
+alertcondition(xQuiet, "Volatility quiet", "{{ticker}} ATR dropped into the low end of its recent range")
+alertcondition(xExpand, "Volatility expanding", "{{ticker}} ATR pushed into the high end of its recent range")
+
